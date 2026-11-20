@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -78,7 +79,7 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
             val gap = Arrangement.spacedBy(12.dp)
             val dim = Modifier.alpha(if (state.sleepMode) 0.4f else 1f)
 
-            Column(Modifier.fillMaxSize().padding(14.dp), gap) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding().padding(14.dp), gap) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("glick", color = Palette.Beat, fontSize = 22.sp, fontWeight = FontWeight.Black)
                     Label(
