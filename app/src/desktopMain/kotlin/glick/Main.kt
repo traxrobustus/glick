@@ -17,13 +17,15 @@ fun main() = application {
     val metronome = remember {
         Metronome(nowEpochMillis = System::currentTimeMillis, logStore = FileActivityLogStore(dataDirectory()))
     }
+    val audio = remember { DesktopAudio(metronome, dataDirectory()) }
     Window(
         onCloseRequest = {
             metronome.stop() // closes the running log entry
+            audio.close()
             exitApplication()
         },
         title = "glick",
-        state = rememberWindowState(size = DpSize(1320.dp, 800.dp)),
+        state = rememberWindowState(size = DpSize(1440.dp, 860.dp)),
         onKeyEvent = { event ->
             if (event.key == Key.Spacebar && event.type == KeyEventType.KeyDown) {
                 metronome.toggle()
@@ -31,6 +33,6 @@ fun main() = application {
             } else false
         },
     ) {
-        App(metronome, midiPorts = ::midiInputPorts)
+        App(metronome, midiPorts = ::midiInputPorts, audio = audio)
     }
 }

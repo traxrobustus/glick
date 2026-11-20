@@ -12,6 +12,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.atomicfu)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))

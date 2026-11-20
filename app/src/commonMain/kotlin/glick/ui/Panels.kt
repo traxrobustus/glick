@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -17,7 +18,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
@@ -42,6 +45,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import glick.core.AudioOutput
 import glick.core.CircleAction
 import glick.core.CircleMode
 import glick.core.DENOMINATORS
@@ -393,30 +397,119 @@ fun MidiPanel(state: MetronomeState, update: Update, midiPorts: () -> List<MidiP
     }
 }
 
+/** A centred sheet over a dimmed app; clicking outside it closes it. */
 @Composable
-fun LogOverlay(metronome: Metronome, onClose: () -> Unit) {
-    val entries by metronome.log.collectAsStateCompat()
+private fun Overlay(
+    title: String,
+    onClose: () -> Unit,
+    actions: @Composable () -> Unit = {},
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
     Box(
         Modifier
+            .fillMaxSize()
             .background(Palette.Inset.copy(alpha = 0.8f))
             .clickable(onClick = onClose)
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
         Panel(
-            "Activity log",
+            title,
             Modifier
                 .widthIn(max = 620.dp)
-                .heightIn(max = 560.dp)
+                .heightIn(max = 600.dp)
                 .border(1.dp, Palette.Outline, RoundedCornerShape(12.dp))
                 .clickable(enabled = false) {},
             trailing = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton("Clear", onClick = metronome::clearLog)
+                    actions()
                     TextButton("Close", onClick = onClose, selected = true)
                 }
             },
+            content = content,
+        )
+    }
+}
+
+@Composable
+fun AudioOverlay(audio: AudioOutput, onClose: () -> Unit) {
+    val devices by audio.devices.collectAsStateCompat()
+    val status by audio.status.collectAsStateCompat()
+    val volume by audio.volume.collectAsStateCompat()
+    LaunchedEffect(Unit) { audio.refreshDevices() }
+
+    Overlay(
+        "Audio output",
+        onClose,
+        actions = { TextButton("Refresh list", onClick = audio::refreshDevices) },
+    ) {
+        if (status.running) {
+            Label(
+                "Sound is on · ${status.sampleRate / 1000.0} kHz · about ${status.latencyMillis} ms of buffer",
+                color = Palette.Sub,
+            )
+        } else {
+            Text("No sound: ${status.error}", color = Palette.Accent, fontSize = 13.sp)
+            Text(
+                "The device may be missing or in use by another program. Choose another one below.",
+                color = Palette.Muted,
+                fontSize = 13.sp,
+            )
+        }
+
+        Label("Playback device", color = Palette.Muted)
+        Column(
+            Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            DeviceRow("System default", status.deviceId == null, status.running) { audio.selectDevice(null) }
+            for (device in devices) {
+                DeviceRow(device.name, status.deviceId == device.id, status.running) { audio.selectDevice(device.id) }
+            }
+        }
+        if (devices.isEmpty()) Label("No playback device was found on this computer.", color = Palette.Muted)
+
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Label("Volume", color = Palette.Muted)
+            LevelSlider(volume, audio::setVolume, Modifier.weight(1f))
+            Text(
+                "${(volume * 100).toInt()}%",
+                color = Palette.Text, fontSize = 14.sp, fontFamily = FontFamily.Monospace,
+                modifier = Modifier.width(44.dp),
+            )
+            TextButton("Test sound", onClick = audio::playTestSound)
+        }
+    }
+}
+
+@Composable
+private fun DeviceRow(name: String, chosen: Boolean, working: Boolean, onClick: () -> Unit) {
+    val mark = when {
+        !chosen -> Palette.Outline
+        working -> Palette.Sub
+        else -> Palette.Accent
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(Palette.Inset)
+            .border(1.dp, mark, RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(10.dp).clip(androidx.compose.foundation.shape.CircleShape).background(if (chosen) mark else Palette.Off))
+        Label(name, Modifier.weight(1f))
+        if (chosen) Label(if (working) "in use" else "failed", color = mark)
+    }
+}
+
+@Composable
+fun LogOverlay(metronome: Metronome, onClose: () -> Unit) {
+    val entries by metronome.log.collectAsStateCompat()
+    Overlay("Activity log", onClose, actions = { TextButton("Clear", onClick = metronome::clearLog) }) {
             val totalSeconds = entries.sumOf { it.durationMillis } / 1000.0
             Label("${entries.size} runs · ${formatClock(totalSeconds)} of click in total", color = Palette.Muted)
             if (entries.isEmpty()) {
@@ -453,6 +546,5 @@ fun LogOverlay(metronome: Metronome, onClose: () -> Unit) {
                     }
                 }
             }
-        }
     }
 }

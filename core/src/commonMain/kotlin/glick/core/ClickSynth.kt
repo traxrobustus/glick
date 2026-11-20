@@ -74,4 +74,6 @@ object ClickPitches {
     const val BEAT = 1440.0
     val SUBDIVISIONS = listOf(1050.0, 850.0, 700.0)
     val POLY = listOf(2330.0, 1650.0, 1240.0, 590.0)
+    /** Circle-timer completion sound: higher and longer than any click. */
+    const val CHIME = 2790.0
 }

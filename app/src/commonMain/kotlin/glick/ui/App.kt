@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import glick.core.AudioOutput
 import glick.core.Metronome
 import glick.core.MidiPort
 import glick.core.SLEEP_BPM
@@ -43,14 +44,19 @@ expect fun formatDateTime(epochMillis: Long): String
 internal fun <T> StateFlow<T>.collectAsStateCompat(): State<T> = collectAsState()
 
 @Composable
-fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>) {
+fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutput? = null) {
     val state by metronome.state.collectAsState()
     val transport = metronome.transport.collectAsState()
     val playing by remember { derivedStateOf { transport.value.playing } }
     var showLog by remember { mutableStateOf(false) }
+    var showAudio by remember { mutableStateOf(false) }
+    val audioStatus = audio?.status?.collectAsState()?.value
+    val audioRunning = audioStatus?.running == true
 
-    // Until the audio engine owns the clock, display frames drive the transport.
-    LaunchedEffect(metronome) {
+    // The audio thread owns the clock. Without sound, display frames keep the
+    // transport (and so the timers and the playhead) moving.
+    LaunchedEffect(metronome, audioRunning) {
+        if (audioRunning) return@LaunchedEffect
         var last = withFrameNanos { it }
         while (true) {
             val now = withFrameNanos { it }
@@ -87,6 +93,14 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>) {
                         selected = state.sleepMode,
                         color = Palette.Poly,
                     )
+                    if (audio != null) {
+                        TextButton(
+                            if (audioRunning) "Audio" else "Audio: no sound",
+                            onClick = { showAudio = true },
+                            selected = !audioRunning,
+                            color = Palette.Accent,
+                        )
+                    }
                     TextButton("Activity log", onClick = { showLog = true })
                 }
 
@@ -104,36 +118,44 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>) {
                 val wide = Modifier.fillMaxWidth()
 
                 if (compact) {
+                    // On a phone each desktop column becomes a tab.
+                    var tab by remember { mutableStateOf(0) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("Tempo", "Pattern", "Timers").forEachIndexed { index, name ->
+                            TextButton(name, { tab = index }, Modifier.weight(1f), selected = tab == index)
+                        }
+                        TextButton(
+                            if (playing) "Stop" else "Start",
+                            onClick = metronome::toggle,
+                            modifier = Modifier.weight(1f),
+                            selected = true,
+                            color = if (playing) Palette.Accent else Palette.Beat,
+                        )
+                    }
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), gap) {
-                        tempo(wide); signature(wide); sequencer(wide); silence(wide)
-                        circle(wide); session(wide); midi(wide)
+                        when (tab) {
+                            0 -> { tempo(wide); signature(wide); silence(wide) }
+                            1 -> sequencer(wide)
+                            else -> { circle(wide); session(wide); midi(wide) }
+                        }
                     }
                 } else {
                     Row(Modifier.fillMaxSize(), gap) {
-                        Column(Modifier.width(290.dp).verticalScroll(rememberScrollState()), gap) {
+                        Column(Modifier.width(270.dp).verticalScroll(rememberScrollState()), gap) {
                             tempo(wide); signature(wide); silence(wide)
                         }
                         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), gap) {
                             sequencer(wide)
-                            Row(horizontalArrangement = gap) {
-                                session(Modifier.weight(1f)); midi(Modifier.weight(1f))
-                            }
                         }
-                        Column(Modifier.width(340.dp).verticalScroll(rememberScrollState()), gap) {
-                            circle(wide)
+                        Column(Modifier.width(320.dp).verticalScroll(rememberScrollState()), gap) {
+                            circle(wide); session(wide); midi(wide)
                         }
                     }
                 }
             }
 
-            if (showLog) {
-                Box(Modifier.fillMaxSize()) { LogOverlayHost(metronome) { showLog = false } }
-            }
+            if (showLog) LogOverlay(metronome) { showLog = false }
+            if (showAudio && audio != null) AudioOverlay(audio) { showAudio = false }
         }
     }
-}
-
-@Composable
-private fun LogOverlayHost(metronome: Metronome, onClose: () -> Unit) {
-    Box(Modifier.fillMaxSize(), propagateMinConstraints = true) { LogOverlay(metronome, onClose) }
 }

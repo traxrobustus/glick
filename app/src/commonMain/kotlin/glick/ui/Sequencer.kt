@@ -41,8 +41,8 @@ import glick.core.MetronomeState
 import glick.core.Transport
 import kotlin.math.ceil
 
-private val ControlsWidth = 300.dp
-private val LaneHeight = 34.dp
+private val ControlsWidth = 270.dp
+private val LaneHeight = 50.dp
 
 /**
  * Step-sequencer view of one bar. Every lane spans the full bar, so lanes with
@@ -68,9 +68,9 @@ fun Sequencer(
         if (t.playing) (t.beat + t.beatPhase) / beats else -1.0
     }
 
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // Beat numbers: the column hint for everything below.
-        Lane(compact, height = 18.dp, controls = { Label("Beat", color = Palette.Muted) }) { gridModifier ->
+        Lane(compact, height = 20.dp, controls = { Label("Beat", color = Palette.Muted) }) { gridModifier ->
             Canvas(gridModifier) {
                 val phase = barPhase()
                 val current = if (phase < 0) -1 else (phase * beats).toInt()
@@ -93,7 +93,7 @@ fun Sequencer(
                 Box(Modifier.size(width = 34.dp, height = 20.dp), contentAlignment = Alignment.Center) {
                     Box(Modifier.size(12.dp).clip(CircleShape).background(Palette.Beat))
                 }
-                Label("Click", Modifier.width(52.dp))
+                Label("Click", Modifier.width(44.dp))
                 Label("tap = accent", Modifier.width(94.dp), color = Palette.Muted)
                 LevelSlider(state.beatLevel, { v -> update { it.copy(beatLevel = v) } }, Modifier.weight(1f))
             },
@@ -124,7 +124,7 @@ fun Sequencer(
                 compact,
                 controls = {
                     Toggle(line.enabled, { v -> update { s -> s.withSub(i) { it.copy(enabled = v) } } }, Palette.Sub)
-                    Label("Sub ${i + 1}", Modifier.width(52.dp))
+                    Label("Sub ${i + 1}", Modifier.width(44.dp))
                     Stepper(line.division, { v -> update { s -> s.withSub(i) { it.copy(division = v) } } }, 1..MAX_DIVISION)
                     LevelSlider(
                         line.level, { v -> update { s -> s.withSub(i) { it.copy(level = v) } } },
@@ -149,7 +149,7 @@ fun Sequencer(
                 compact,
                 controls = {
                     Toggle(voice.enabled, { v -> update { s -> s.withPoly(i) { it.copy(enabled = v) } } }, Palette.Poly)
-                    Label("${voice.pulses}:$beats", Modifier.width(52.dp))
+                    Label("${voice.pulses}:$beats", Modifier.width(44.dp))
                     Stepper(voice.pulses, { v -> update { s -> s.withPoly(i) { it.copy(pulses = v) } } }, 1..MAX_POLY_PULSES)
                     LevelSlider(
                         voice.level, { v -> update { s -> s.withPoly(i) { it.copy(level = v) } } },
@@ -206,7 +206,7 @@ private fun DrawScope.centredText(
 ) {
     val layout = measurer.measure(
         text,
-        TextStyle(fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = weight),
+        TextStyle(fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = weight),
     )
     drawText(
         layout,
