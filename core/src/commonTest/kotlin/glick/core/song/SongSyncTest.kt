@@ -147,4 +147,18 @@ class SongSyncTest {
         assertEquals(2, even.setBarStart(6).downbeat)
         assertEquals(even, SongGrid.decode(even.encode()))
     }
+
+    @Test
+    fun theSongHasNoPositionWhileTheClickIsStopped() {
+        val m = Metronome(MetronomeState(songMode = SongMode.SongFollowsClick), nowEpochMillis = { 0L })
+        m.setSong(SongTimeline(driftingGrid()), resetSpeed = true)
+        assertTrue(m.transport.value.songSeconds < 0)
+        m.play()
+        m.advance(500_000_000L)
+        assertTrue(m.transport.value.songSeconds > 0)
+        m.stop()
+        assertTrue(m.transport.value.songSeconds < 0, "a stopped song must not hold its position: the engine would keep sounding it")
+        m.advance(500_000_000L)
+        assertTrue(m.transport.value.songSeconds < 0)
+    }
 }

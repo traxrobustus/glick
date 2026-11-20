@@ -269,7 +269,8 @@ class Metronome(
     private fun stopLocked() {
         val t = _transport.value
         if (!t.playing) return
-        _transport.value = t.copy(playing = false, beat = 0, beatPhase = 0.0, beatSilenced = false)
+        // No song position while stopped: the song falls silent with the click.
+        _transport.value = t.copy(playing = false, beat = 0, beatPhase = 0.0, beatSilenced = false, songSeconds = -1.0)
         val s = _state.value
         val entry = LogEntry(
             startEpochMillis = runStartMillis,

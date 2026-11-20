@@ -423,6 +423,7 @@ private fun Waveform(
         }
 
         // The waveform. Drag to scroll, pinch to zoom, double-tap to add a beat.
+        Box {
         Canvas(
             Modifier
                 .fillMaxWidth()
@@ -463,11 +464,16 @@ private fun Waveform(
                     drawLine(Palette.Accent, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
                 }
             }
+        }
+        // The playhead has a layer of its own: it moves every frame, and the
+        // waveform under it is far too costly to redraw that often.
+        Canvas(Modifier.fillMaxWidth().height(height)) {
             val at = transport().songSeconds
             if (at >= 0) {
                 val x = port.x(at)
                 drawLine(Palette.Text, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
             }
+        }
         }
 
         // The loop. Drag either end; it snaps to the nearest bar line.

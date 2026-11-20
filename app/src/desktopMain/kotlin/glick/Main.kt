@@ -26,6 +26,8 @@ import glick.core.WindowBounds
 import glick.core.song.CachingSongLibrary
 import glick.core.song.SongSession
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import glick.ui.App
 
@@ -54,7 +56,10 @@ fun main() = application {
             } else false
         },
     ) {
-        App(app.metronome, midiPorts = ::midiInputPorts, audio = app.audio, song = app.song, pickSong = { pickSongFile() })
+        App(app.metronome, midiPorts = ::midiInputPorts, audio = app.audio, song = app.song, 
+            // The file chooser blocks until it is closed, so it must not run on the UI thread.
+            pickSong = { withContext(Dispatchers.IO) { pickSongFile() } },
+        )
     }
 }
 
