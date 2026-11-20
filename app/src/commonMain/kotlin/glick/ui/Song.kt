@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -143,7 +144,7 @@ fun SongPanel(
             )
 
             if (view.recording) {
-                RecordingBlock(view.taps.size, onTap = { session.tap(outputDelayMillis / 1000.0) }, onStop = session::stopRecording)
+                RecordingBlock(view.taps.size, compact, onTap = { session.tap(outputDelayMillis / 1000.0) }, onStop = session::stopRecording)
             } else if (grid.unmapped) {
                 Text(
                     "This song has no beats yet. Record its tempo: the song plays, and you tap along on every beat. " +
@@ -217,7 +218,7 @@ fun SongPanel(
             var knownBpm by remember(view.ref, grid.knownBpm, grid.unmapped) {
                 mutableDoubleStateOf(grid.knownBpm ?: medianBpm(grid))
             }
-            FlowRow(horizontalArrangement = row, verticalArrangement = row) {
+            FlowRow(horizontalArrangement = row, verticalArrangement = row, itemVerticalAlignment = Alignment.CenterVertically) {
                 Row(horizontalArrangement = row, verticalAlignment = Alignment.CenterVertically) {
                     Label("Tempo", color = Palette.Muted)
                     NumberField(
@@ -270,6 +271,9 @@ fun SongPanel(
     }
 }
 
+/** Seconds of the song shown across the waveform while a tempo is being recorded. */
+private const val RECORDING_SPAN = 20.0
+
 /** What is visible of the song: the time at the left edge and the zoom. */
 private class Viewport(start: Double, secondsPerPixel: Double) {
     var start by mutableDoubleStateOf(start)
@@ -321,6 +325,15 @@ private fun Waveform(
     var draggedBeatSeconds by remember { mutableDoubleStateOf(0.0) }
     var draggedLoopEnd by remember { mutableStateOf<Boolean?>(null) }
     var draggedLoopBar by remember { mutableIntStateOf(0) }
+
+    // A recording is watched close up, so that single taps can be told apart;
+    // afterwards the view opens out to the whole song again.
+    LaunchedEffect(view.ref, view.recording) {
+        if (port.secondsPerPixel <= 0.0) return@LaunchedEffect
+        port.secondsPerPixel = (if (view.recording) minOf(RECORDING_SPAN, duration) else duration) / port.width
+        port.start = 0.0
+        port.clamp(duration)
+    }
 
     // Keep the playhead on screen while playing.
     LaunchedEffect(view.ref) {
@@ -598,7 +611,7 @@ private fun medianBpm(grid: SongGrid): Double {
 
 /** Shown while the tempo is being recorded: one big target to tap on every beat. */
 @Composable
-private fun RecordingBlock(taps: Int, onTap: () -> Unit, onStop: () -> Unit) {
+private fun RecordingBlock(taps: Int, compact: Boolean, onTap: () -> Unit, onStop: () -> Unit) {
     val tap by rememberUpdatedState(onTap)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(
@@ -618,9 +631,16 @@ private fun RecordingBlock(taps: Int, onTap: () -> Unit, onStop: () -> Unit) {
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("TAP ON EVERY BEAT", color = Palette.Inset, fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                Text("$taps beats recorded · the space bar works too", color = Palette.Inset, fontSize = 12.sp)
+            Column(Modifier.padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    if (compact) "TAP EVERY BEAT" else "TAP ON EVERY BEAT",
+                    color = Palette.Inset, fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp, maxLines = 1,
+                )
+                Text(
+                    // Only a desktop has a space bar to tap with.
+                    if (compact) "$taps beats recorded" else "$taps beats recorded · the space bar works too",
+                    color = Palette.Inset, fontSize = 12.sp, maxLines = 1,
+                )
             }
         }
         TextButton("Stop recording", onStop)
@@ -708,12 +728,12 @@ private fun FirstBeatAligner(
                 )
             }
         }
+        Label("First beat at ${formatNumber(pending, 3)} s", color = Palette.Muted)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Label("Nudge", color = Palette.Muted)
             for (step in listOf(-10, -1, 1, 10)) {
-                TextButton(if (step > 0) "+$step ms" else "−${-step} ms", { nudge(step / 1000.0) })
+                TextButton(if (step > 0) "+$step ms" else "−${-step} ms", { nudge(step / 1000.0) }, horizontalPadding = 8.dp)
             }
-            Label("first beat at ${formatNumber(pending, 3)} s", color = Palette.Muted)
         }
     }
 }

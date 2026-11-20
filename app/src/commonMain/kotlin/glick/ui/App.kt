@@ -101,9 +101,13 @@ fun App(
             Column(Modifier.fillMaxSize().safeDrawingPadding().padding(14.dp), gap) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("glick", color = Palette.Beat, fontSize = 22.sp, fontWeight = FontWeight.Black)
+                    // A phone has no room for the tempo next to the buttons; there the tab row shows it.
                     Label(
-                        if (state.sleepMode) "Sleep mode · steady ${SLEEP_BPM.toInt()} BPM click"
-                        else "${formatNumber(state.bpm, 1)} BPM · ${state.signature}",
+                        when {
+                            compact -> ""
+                            state.sleepMode -> "Sleep mode · steady ${SLEEP_BPM.toInt()} BPM click"
+                            else -> "${formatNumber(state.bpm, 1)} BPM · ${state.signature}"
+                        },
                         Modifier.weight(1f),
                         Palette.Muted,
                     )
@@ -173,6 +177,11 @@ fun App(
                             color = if (playing) Palette.Accent else Palette.Beat,
                         )
                     }
+                    Label(
+                        if (state.sleepMode) "Sleep mode · steady ${SLEEP_BPM.toInt()} BPM click"
+                        else "${formatNumber(state.bpm, 1)} BPM · ${state.signature}",
+                        color = Palette.Muted,
+                    )
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), gap) {
                         when (tab) {
                             0 -> { tempo(wide); signature(wide); silence(wide) }
