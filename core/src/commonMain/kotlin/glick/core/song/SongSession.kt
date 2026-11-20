@@ -118,15 +118,18 @@ class SongSession(
         apply(next)
     }
 
-    /** Throws the map away and detects the beats again. */
-    fun redetect() {
+    /**
+     * Throws the map away and detects the beats again. With [knownBpm] the
+     * search stays near that tempo; the value is remembered with the song.
+     */
+    fun redetect(knownBpm: Double? = null) {
         val audio = source ?: return
         val ref = _view.value.ref ?: return
         loading?.cancel()
         loading = scope.launch {
             _view.value = _view.value.copy(busy = "Finding the beats", progress = 0f)
             val detected = withContext(Dispatchers.Default) {
-                SongGrid.of(BeatDetector.detect(audio) { p -> report("Finding the beats", p) })
+                SongGrid.of(BeatDetector.detect(audio, knownBpm) { p -> report("Finding the beats", p) }).copy(knownBpm = knownBpm)
             }
             _view.value = _view.value.copy(busy = null)
             edit { detected }

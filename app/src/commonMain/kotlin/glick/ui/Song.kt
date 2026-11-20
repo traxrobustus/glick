@@ -53,6 +53,7 @@ import glick.core.MetronomeState
 import glick.core.SongMode
 import glick.core.SongRef
 import glick.core.Transport
+import glick.core.song.BeatDetector
 import glick.core.song.SongGrid
 import glick.core.song.SongSession
 import glick.core.song.SongTimeline
@@ -176,8 +177,22 @@ fun SongPanel(
                 TextButton("Steady tempo", { session.edit { it.steadied() } })
                 TextButton("Beats ×2", { session.edit { it.doubleTempo() }; selected = -1 })
                 TextButton("Beats ÷2", { session.edit { it.halveTempo() }; selected = -1 })
-                TextButton("Detect again", session::redetect)
+                TextButton("Analyse again", { session.redetect() })
                 TextButton("Loop whole song", { session.edit { it.copy(loopStartBar = 0, loopEndBar = null) } })
+            }
+
+            // When the tempo is known, detection can start from it instead of guessing.
+            var knownBpm by remember(view.ref, grid.knownBpm) {
+                mutableDoubleStateOf(grid.knownBpm ?: kotlin.math.round(timeline.bpmOfBeat(grid.beats.size / 2)))
+            }
+            Row(horizontalArrangement = row, verticalAlignment = Alignment.CenterVertically) {
+                Label("Known tempo", color = Palette.Muted)
+                NumberField(
+                    knownBpm, { knownBpm = it },
+                    BeatDetector.MIN_KNOWN_BPM, BeatDetector.MAX_KNOWN_BPM, decimals = 2, width = 76.dp,
+                )
+                Label("BPM", color = Palette.Muted)
+                TextButton("Analyse again at this tempo", { session.redetect(knownBpm); selected = -1 }, selected = grid.knownBpm == knownBpm)
             }
 
             val beat = selected.takeIf { it in grid.beats.indices }

@@ -44,6 +44,13 @@ object BeatDetector {
     private const val LIKELY_BPM = 120.0
     private const val TEMPO_SPREAD = 1.0
 
+    /** With a tempo given by the user, how far (in octaves) the song may plausibly stray from it. */
+    private const val KNOWN_TEMPO_SPREAD = 0.1
+
+    /** The tempos a user may state. */
+    const val MIN_KNOWN_BPM = 20.0
+    const val MAX_KNOWN_BPM = 480.0
+
     /** Seconds of envelope each local tempo estimate looks at, and the seconds between estimates. */
     private const val TEMPO_WINDOW = 8.0
     private const val TEMPO_HOP = 1.0
@@ -104,19 +111,26 @@ object BeatDetector {
     /**
      * Runs the whole analysis. [progress] gets 0f..1f.
      *
+     * When the tempo is known, pass it as [knownBpm]: the tracker then looks
+     * only near that tempo, which rules out the half- and double-tempo
+     * readings it could otherwise fall into, while still following the
+     * song's small drifts around it.
+     *
      * Reads [source] once in blocks; working memory is a few megabytes however
      * long the song is. A silent file gets a plain 120 BPM grid.
      */
-    fun detect(source: AudioSource, progress: (Float) -> Unit = {}): Detection {
+    fun detect(source: AudioSource, knownBpm: Double? = null, progress: (Float) -> Unit = {}): Detection {
+        val known = knownBpm?.takeIf { it.isFinite() }?.coerceIn(MIN_KNOWN_BPM, MAX_KNOWN_BPM)
         val duration = source.frames.toDouble() / source.sampleRate
         val frames = OnsetFrames.analyse(source) { progress(0.9f * it) }
         val rate = frames.framesPerSecond
         val envelope = onsetEnvelope(frames.flux, rate)
         val detection = if (envelope == null) {
-            val beats = generateSequence(0.0) { it + 60 / LIKELY_BPM }.takeWhile { it <= duration }.toList()
-            Detection(beats, beatsPerBar = 4, noteLength = 4, downbeat = 0, bpm = LIKELY_BPM)
+            val bpm = known ?: LIKELY_BPM
+            val beats = generateSequence(0.0) { it + 60 / bpm }.takeWhile { it <= duration }.toList()
+            Detection(beats, beatsPerBar = 4, noteLength = 4, downbeat = 0, bpm = bpm)
         } else {
-            val periods = trackTempo(envelope, rate)
+            val periods = trackTempo(envelope, rate, known)
             val placed = placeBeats(trackBeats(envelope, periods), periods, frames.flux, envelope, rate, duration)
             val beats = placed.beats
             // Measured across a few beats at a time, so that the timing error of single beats matters less.
@@ -179,7 +193,7 @@ object BeatDetector {
      * the tempo from flipping to its half or double for a moment and carries
      * it across passages with no onsets.
      */
-    private fun trackTempo(envelope: FloatArray, rate: Double): DoubleArray {
+    private fun trackTempo(envelope: FloatArray, rate: Double, known: Double?): DoubleArray {
         val n = envelope.size
         // Onset peaks are a frame or two wide and periods are rarely whole frames:
         // widened a little, the peaks still meet when shifted by the nearest whole period.
@@ -188,11 +202,16 @@ object BeatDetector {
             for (k in -2..2) if (it + k in 0 until n) sum += (3 - abs(k)) * envelope[it + k]
             sum / 9
         }
-        val minLag = max(2, floor(60 * rate / MAX_BPM).toInt())
-        val maxLag = ceil(60 * rate / MIN_BPM).toInt()
+        // A stated tempo may lie outside the usual range; the search then reaches a little past it.
+        val fastest = max(MAX_BPM, (known ?: 0.0) * 1.25)
+        val slowest = min(MIN_BPM, (known ?: MIN_BPM) / 1.25)
+        val minLag = max(2, floor(60 * rate / fastest).toInt())
+        val maxLag = ceil(60 * rate / slowest).toInt()
         val lags = maxLag - minLag + 1
+        val centre = known ?: LIKELY_BPM
+        val spread = if (known != null) KNOWN_TEMPO_SPREAD else TEMPO_SPREAD
         val prior = DoubleArray(lags) {
-            val octaves = ln(60 * rate / (minLag + it) / LIKELY_BPM) / ln(2.0) / TEMPO_SPREAD
+            val octaves = ln(60 * rate / (minLag + it) / centre) / ln(2.0) / spread
             exp(-0.5 * octaves * octaves)
         }
         val length = min(n, (TEMPO_WINDOW * rate).roundToInt())

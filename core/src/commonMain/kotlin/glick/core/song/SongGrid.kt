@@ -27,6 +27,8 @@ data class SongGrid(
     val loopStartBar: Int = 0,
     /** First bar after the loop; null loops to the last whole bar. */
     val loopEndBar: Int? = null,
+    /** The tempo the user stated for this song, which beat detection then starts from. */
+    val knownBpm: Double? = null,
 ) {
     /** Sorted beats, legal signatures and a loop inside the song. */
     fun sanitized(): SongGrid {
