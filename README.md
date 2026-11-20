@@ -91,3 +91,8 @@ and written with Claude Code.
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+The desktop app bundles two open-source libraries for reading audio files,
+each under its own licence: JLayer (MP3, LGPL) and jFLAC (FLAC). They are used
+unmodified, as separate jar files; see their projects for the exact terms. The
+Android app does not contain them.
