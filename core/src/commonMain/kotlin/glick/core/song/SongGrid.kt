@@ -27,8 +27,16 @@ data class SongGrid(
     val loopStartBar: Int = 0,
     /** First bar after the loop; null loops to the last whole bar. */
     val loopEndBar: Int? = null,
-    /** The tempo the user stated for this song, which beat detection then starts from. */
+    /** The tempo the user stated for this song. */
     val knownBpm: Double? = null,
+    /**
+     * Set while the beats are still the plain steady grid made from [knownBpm]:
+     * the time of the first beat of bar 1, which the user slides into place.
+     * Editing single beats ends that state.
+     */
+    val firstBeat: Double? = null,
+    /** True until the song has been given beats by tapping, a known tempo or detection. */
+    val unmapped: Boolean = false,
 ) {
     /** Sorted beats, legal signatures and a loop inside the song. */
     fun sanitized(): SongGrid {

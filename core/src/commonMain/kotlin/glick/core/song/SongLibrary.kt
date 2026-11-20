@@ -29,6 +29,14 @@ interface SongLibrary {
 class WaveformPeaks(val blockFrames: Int, val sampleRate: Int, val low: FloatArray, val high: FloatArray) {
     val blocks: Int get() = low.size
 
+    /** Where the music starts: the first moment the signal reaches a quarter of its loudest peak. */
+    fun firstSoundSeconds(): Double {
+        var loudest = 0f
+        for (i in 0 until blocks) loudest = maxOf(loudest, high[i], -low[i])
+        val index = (0 until blocks).firstOrNull { maxOf(high[it], -low[it]) >= 0.25f * loudest } ?: 0
+        return index.toDouble() * blockFrames / sampleRate
+    }
+
     companion object {
         const val BLOCK_FRAMES = 512
 

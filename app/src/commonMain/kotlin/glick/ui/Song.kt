@@ -42,6 +42,7 @@ import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -52,6 +53,8 @@ import glick.core.Metronome
 import glick.core.MetronomeState
 import glick.core.SongMode
 import glick.core.SongRef
+import glick.core.TimeSignature
+import glick.core.song.SongSetup
 import glick.core.Transport
 import glick.core.song.BeatDetector
 import glick.core.song.SongGrid
@@ -87,6 +90,7 @@ fun SongPanel(
     transport: () -> Transport,
     pickSong: suspend () -> SongRef?,
     onOpen: (SongRef) -> Unit,
+    outputDelayMillis: Int,
     compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -113,8 +117,8 @@ fun SongPanel(
         val name = view.ref?.name
         when {
             name == null -> Text(
-                "Load a song (WAV, FLAC or MP3) to practise with it. glick finds its beats and bars, " +
-                    "and keeps the click and the song together.",
+                "Load a song (WAV, FLAC or MP3) to practise with it. Give its tempo or tap along to it, " +
+                    "and glick keeps the click and the song together.",
                 color = Palette.Muted, fontSize = 13.sp,
             )
             view.error != null -> {
@@ -133,32 +137,57 @@ fun SongPanel(
 
         if (grid != null && view.ready) {
             val timeline = remember(grid) { SongTimeline(grid) }
-            Label("$name · ${formatClock(view.durationSeconds)} · ${timeline.barCount} bars")
-
-            FlowRow(horizontalArrangement = row, verticalArrangement = row) {
-                TextButton(
-                    "Click follows song",
-                    { metronome.update { it.copy(songMode = SongMode.ClickFollowsSong) } },
-                    selected = state.songMode == SongMode.ClickFollowsSong,
-                )
-                TextButton(
-                    "Song follows click",
-                    { metronome.update { it.copy(songMode = SongMode.SongFollowsClick) } },
-                    selected = state.songMode == SongMode.SongFollowsClick,
-                )
-                Row(Modifier.width(200.dp), row, Alignment.CenterVertically) {
-                    Label("Song level", color = Palette.Muted)
-                    LevelSlider(state.songLevel, { v -> metronome.update { it.copy(songLevel = v) } }, Modifier.weight(1f))
-                }
-            }
-            Text(
-                if (state.songMode == SongMode.ClickFollowsSong) {
-                    "The click takes its tempo from the song's beats. Changing the tempo plays both faster or slower."
-                } else {
-                    "The click keeps the tempo you set and the song is stretched to it."
-                },
-                color = Palette.Muted, fontSize = 13.sp,
+            Label(
+                if (grid.unmapped) "$name · ${formatClock(view.durationSeconds)}"
+                else "$name · ${formatClock(view.durationSeconds)} · ${timeline.barCount} bars",
             )
+
+            if (view.recording) {
+                RecordingBlock(view.taps.size, onTap = { session.tap(outputDelayMillis / 1000.0) }, onStop = session::stopRecording)
+            } else if (grid.unmapped) {
+                Text(
+                    "This song has no beats yet. Record its tempo: the song plays, and you tap along on every beat. " +
+                        "Stop whenever you like; the rest of the song continues at the tempo you tapped.",
+                    color = Palette.Text, fontSize = 13.sp,
+                )
+                TextButton("Record the tempo by tapping", session::startRecording, selected = true, color = Palette.Accent)
+            }
+
+            val firstBeat = grid.firstBeat
+            val steadyBpm = grid.knownBpm
+            if (firstBeat != null && steadyBpm != null && !view.recording) {
+                FirstBeatAligner(
+                    view, steadyBpm, firstBeat, timeline.signatureOfBar(0).numerator,
+                    onChange = session::setSteady,
+                )
+            }
+
+            if (!view.recording && !grid.unmapped) {
+                FlowRow(horizontalArrangement = row, verticalArrangement = row) {
+                    TextButton(
+                        "Click follows song",
+                        { metronome.update { it.copy(songMode = SongMode.ClickFollowsSong) } },
+                        selected = state.songMode == SongMode.ClickFollowsSong,
+                    )
+                    TextButton(
+                        "Song follows click",
+                        { metronome.update { it.copy(songMode = SongMode.SongFollowsClick) } },
+                        selected = state.songMode == SongMode.SongFollowsClick,
+                    )
+                    Row(Modifier.width(200.dp), row, Alignment.CenterVertically) {
+                        Label("Song level", color = Palette.Muted)
+                        LevelSlider(state.songLevel, { v -> metronome.update { it.copy(songLevel = v) } }, Modifier.weight(1f))
+                    }
+                }
+                Text(
+                    if (state.songMode == SongMode.ClickFollowsSong) {
+                        "The click takes its tempo from the song's beats. Changing the tempo plays both faster or slower."
+                    } else {
+                        "The click keeps the tempo you set and the song is stretched to it."
+                    },
+                    color = Palette.Muted, fontSize = 13.sp,
+                )
+            }
 
             Waveform(
                 view = view,
@@ -170,31 +199,42 @@ fun SongPanel(
                 onEdit = session::edit,
                 height = if (compact) 190.dp else 250.dp,
             )
+            if (view.recording) return@Panel
 
-            FlowRow(horizontalArrangement = row, verticalArrangement = row) {
+            if (!grid.unmapped) FlowRow(horizontalArrangement = row, verticalArrangement = row) {
                 TextButton("Undo", session::undo, selected = false, color = Palette.Muted)
                 TextButton("Redo", session::redo)
+                TextButton("Record tempo", session::startRecording)
+                TextButton("Snap taps to attacks", session::snapTaps)
+                TextButton("Smooth taps", session::smoothTaps)
                 TextButton("Steady tempo", { session.edit { it.steadied() } })
                 TextButton("Beats ×2", { session.edit { it.doubleTempo() }; selected = -1 })
                 TextButton("Beats ÷2", { session.edit { it.halveTempo() }; selected = -1 })
-                TextButton("Analyse again", { session.redetect() })
                 TextButton("Loop whole song", { session.edit { it.copy(loopStartBar = 0, loopEndBar = null) } })
             }
 
-            // When the tempo is known, detection can start from it instead of guessing.
-            var knownBpm by remember(view.ref, grid.knownBpm) {
-                mutableDoubleStateOf(grid.knownBpm ?: kotlin.math.round(timeline.bpmOfBeat(grid.beats.size / 2)))
+            // The song's tempo, if it is known: lay a steady grid at it, or let detection start from it.
+            var knownBpm by remember(view.ref, grid.knownBpm, grid.unmapped) {
+                mutableDoubleStateOf(grid.knownBpm ?: medianBpm(grid))
             }
-            Row(horizontalArrangement = row, verticalAlignment = Alignment.CenterVertically) {
-                Label("Known tempo", color = Palette.Muted)
-                NumberField(
-                    knownBpm, { knownBpm = it },
-                    BeatDetector.MIN_KNOWN_BPM, BeatDetector.MAX_KNOWN_BPM, decimals = 2, width = 76.dp,
+            FlowRow(horizontalArrangement = row, verticalArrangement = row) {
+                Row(horizontalArrangement = row, verticalAlignment = Alignment.CenterVertically) {
+                    Label("Tempo", color = Palette.Muted)
+                    NumberField(
+                        knownBpm, { knownBpm = it },
+                        BeatDetector.MIN_KNOWN_BPM, BeatDetector.MAX_KNOWN_BPM, decimals = 2, width = 76.dp,
+                    )
+                    Label("BPM", color = Palette.Muted)
+                }
+                TextButton(
+                    "Steady grid",
+                    { session.setSteady(knownBpm, grid.firstBeat ?: timeline.barStartSeconds(0)); selected = -1 },
                 )
-                Label("BPM", color = Palette.Muted)
-                TextButton("Analyse again at this tempo", { session.redetect(knownBpm); selected = -1 }, selected = grid.knownBpm == knownBpm)
+                TextButton("Detect near it", { session.redetect(knownBpm); selected = -1 })
+                TextButton("Detect freely", { session.redetect(); selected = -1 })
             }
 
+            if (grid.unmapped) return@Panel
             val beat = selected.takeIf { it in grid.beats.indices }
             if (beat == null) {
                 Text(
@@ -269,6 +309,8 @@ private fun Waveform(
 ) {
     val peaks = view.peaks ?: return
     val duration = view.durationSeconds
+    // A song without beats, or one whose tempo is being recorded, has no grid worth showing or editing.
+    val mapped = !grid.unmapped && !view.recording
     val measurer = rememberTextMeasurer(cacheSize = 96)
     val port = remember(view.ref) { Viewport(0.0, 0.0) }
     val currentGrid by rememberUpdatedState(grid)
@@ -337,12 +379,12 @@ private fun Waveform(
                 .fillMaxWidth()
                 .height(34.dp)
                 .pointerInput(view.ref) {
-                    detectTapGestures { onSelect(nearestBeat(it.x, 22.dp.toPx())) }
+                    detectTapGestures { if (!currentGrid.unmapped) onSelect(nearestBeat(it.x, 22.dp.toPx())) }
                 }
                 .pointerInput(view.ref) {
                     detectDragGestures(
                         onDragStart = { at ->
-                            draggedBeat = nearestBeat(at.x, 22.dp.toPx())
+                            draggedBeat = if (currentGrid.unmapped) -1 else nearestBeat(at.x, 22.dp.toPx())
                             if (draggedBeat >= 0) {
                                 draggedBeatSeconds = currentGrid.beats[draggedBeat].seconds
                                 onSelect(draggedBeat)
@@ -362,6 +404,7 @@ private fun Waveform(
                     }
                 },
         ) {
+            if (!mapped) return@Canvas
             val shown = if (draggedBeat >= 0) grid.moveBeat(draggedBeat, draggedBeatSeconds) else grid
             drawMarkers(port, shown, SongTimeline(shown), selected, measurer)
         }
@@ -379,10 +422,10 @@ private fun Waveform(
                 }
                 .pointerInput(view.ref) {
                     detectTapGestures(
-                        onTap = { onSelect(nearestBeat(it.x, 14.dp.toPx())) },
+                        onTap = { if (!currentGrid.unmapped) onSelect(nearestBeat(it.x, 14.dp.toPx())) },
                         onDoubleTap = { at ->
                             val seconds = port.seconds(at.x)
-                            onEdit { it.addBeat(seconds) }
+                            if (!currentGrid.unmapped) onEdit { it.addBeat(seconds) }
                         },
                     )
                 },
@@ -396,8 +439,17 @@ private fun Waveform(
                 true -> loopEnd = draggedLoopBar.coerceIn(loopStart + 1, shownTimeline.barCount)
                 null -> {}
             }
-            drawWave(port, peaks, shownTimeline.barStartSeconds(loopStart), shownTimeline.barStartSeconds(loopEnd))
-            drawGrid(port, shown, shownTimeline, selected)
+            if (mapped) {
+                drawWave(port, peaks, shownTimeline.barStartSeconds(loopStart), shownTimeline.barStartSeconds(loopEnd))
+                drawGrid(port, shown, shownTimeline, selected)
+            } else {
+                drawWave(port, peaks, 0.0, duration)
+                // The beats tapped so far in a tempo recording.
+                for (tap in view.taps) {
+                    val x = port.x(tap)
+                    drawLine(Palette.Accent, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+                }
+            }
             val at = transport().songSeconds
             if (at >= 0) {
                 val x = port.x(at)
@@ -433,6 +485,7 @@ private fun Waveform(
                     }
                 },
         ) {
+            if (!mapped) return@Canvas
             var loopStart = timeline.loopStartBar
             var loopEnd = timeline.loopEndBar
             when (draggedLoopEnd) {
@@ -496,7 +549,7 @@ private fun DrawScope.drawGrid(port: Viewport, grid: SongGrid, timeline: SongTim
         val x = port.x(timeline.barStartSeconds(bar))
         if (x in 0f..size.width) drawLine(Palette.Beat.copy(alpha = 0.9f), Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.5.dp.toPx())
     }
-    if (spacing >= 5) {
+    if (spacing >= 9) {
         beats.forEachIndexed { i, beat ->
             val x = port.x(beat.seconds)
             if (x in 0f..size.width) {
@@ -536,23 +589,164 @@ private fun DrawScope.drawMarkers(port: Viewport, grid: SongGrid, timeline: Song
     }
 }
 
+/** The tempo in the middle of the grid's spread of beat lengths, rounded to a whole BPM. */
+private fun medianBpm(grid: SongGrid): Double {
+    val intervals = grid.beats.zipWithNext { a, b -> b.seconds - a.seconds }.sorted()
+    if (intervals.isEmpty()) return 120.0
+    return kotlin.math.round(60.0 / intervals[intervals.size / 2]).coerceIn(BeatDetector.MIN_KNOWN_BPM, BeatDetector.MAX_KNOWN_BPM)
+}
+
+/** Shown while the tempo is being recorded: one big target to tap on every beat. */
+@Composable
+private fun RecordingBlock(taps: Int, onTap: () -> Unit, onStop: () -> Unit) {
+    val tap by rememberUpdatedState(onTap)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .weight(1f)
+                .height(96.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Palette.Accent)
+                // The beat is marked when the finger lands, not when it lifts.
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type == PointerEventType.Press) tap()
+                        }
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("TAP ON EVERY BEAT", color = Palette.Inset, fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                Text("$taps beats recorded · the space bar works too", color = Palette.Inset, fontSize = 12.sp)
+            }
+        }
+        TextButton("Stop recording", onStop)
+    }
+}
+
 /**
- * Asked when a song is opened for the first time: its tempo, if the user
- * knows it, gives beat detection a starting point.
+ * For a song whose tempo is known: the start of the music, magnified, under
+ * fixed beat lines. Gliding the waveform sideways until its first beat sits
+ * on the red line puts the whole grid in place; the lines after it show at
+ * once whether the tempo fits too.
  */
 @Composable
-fun SongTempoOverlay(ref: SongRef, onLoad: (knownBpm: Double?) -> Unit, onCancel: () -> Unit) {
+private fun FirstBeatAligner(
+    view: SongView,
+    bpm: Double,
+    firstBeat: Double,
+    beatsPerBar: Int,
+    onChange: (bpm: Double, firstBeat: Double) -> Unit,
+) {
+    val peaks = view.peaks ?: return
+    val period = 60.0 / bpm
+    // Two bars across, with the first beat a little in from the left edge.
+    val beatsShown = (beatsPerBar * 2 + 1).coerceIn(5, 17)
+    var pending by remember(firstBeat) { mutableDoubleStateOf(firstBeat) }
+    val current by rememberUpdatedState(firstBeat)
+    val change by rememberUpdatedState(onChange)
+    val nudge = { seconds: Double -> onChange(bpm, (firstBeat + seconds).coerceIn(0.0, view.durationSeconds)) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "Glide the waveform until the first beat of bar 1 sits on the red line. " +
+                "The following lines are the next beats at ${formatNumber(bpm, 2)} BPM.",
+            color = Palette.Text, fontSize = 13.sp,
+        )
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(110.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Palette.Inset)
+                .pointerInput(bpm, beatsShown) {
+                    detectDragGestures(
+                        onDragEnd = { change(bpm, pending) },
+                        onDragCancel = { pending = current },
+                    ) { input, drag ->
+                        input.consume()
+                        val secondsPerPixel = beatsShown * period / size.width
+                        // Dragging the audio to the right puts an earlier moment under the line.
+                        pending = (pending - drag.x * secondsPerPixel).coerceIn(0.0, view.durationSeconds)
+                    }
+                },
+        ) {
+            val secondsPerPixel = beatsShown * period / size.width
+            val lineX = size.width / beatsShown * 0.5f
+            val start = pending - lineX * secondsPerPixel
+            val blockSeconds = peaks.blockFrames.toDouble() / peaks.sampleRate
+            val middle = size.height / 2
+            var x = 0f
+            while (x < size.width) {
+                val first = ((start + x * secondsPerPixel) / blockSeconds).toInt()
+                val last = ((start + (x + 1f) * secondsPerPixel) / blockSeconds).toInt().coerceAtMost(peaks.blocks - 1)
+                if (first >= 0 && first <= last) {
+                    var low = 0f
+                    var high = 0f
+                    for (block in first..last) {
+                        if (peaks.low[block] < low) low = peaks.low[block]
+                        if (peaks.high[block] > high) high = peaks.high[block]
+                    }
+                    drawLine(Palette.Sub, Offset(x, middle - high * middle * 0.95f), Offset(x, middle - low * middle * 0.95f + 1f))
+                }
+                x += 1f
+            }
+            for (beat in 0 until beatsShown) {
+                val at = lineX + (beat * period / secondsPerPixel).toFloat()
+                val barStart = beat % beatsPerBar == 0
+                drawLine(
+                    when {
+                        beat == 0 -> Palette.Accent
+                        barStart -> Palette.Beat
+                        else -> Palette.Text.copy(alpha = 0.4f)
+                    },
+                    Offset(at, 0f), Offset(at, size.height),
+                    strokeWidth = if (barStart) 2.dp.toPx() else 1.dp.toPx(),
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Label("Nudge", color = Palette.Muted)
+            for (step in listOf(-10, -1, 1, 10)) {
+                TextButton(if (step > 0) "+$step ms" else "−${-step} ms", { nudge(step / 1000.0) })
+            }
+            Label("first beat at ${formatNumber(pending, 3)} s", color = Palette.Muted)
+        }
+    }
+}
+
+/**
+ * Asked when a song is opened for the first time: its time signature, and its
+ * tempo if the user knows it. Without a tempo the song is opened ready for
+ * its tempo to be recorded by tapping.
+ */
+@Composable
+fun SongTempoOverlay(
+    ref: SongRef,
+    initialSignature: TimeSignature,
+    onLoad: (SongSetup) -> Unit,
+    onCancel: () -> Unit,
+) {
     var unknown by remember(ref) { mutableStateOf(true) }
     var bpm by remember(ref) { mutableDoubleStateOf(120.0) }
+    var signature by remember(ref) { mutableStateOf(initialSignature) }
     Overlay(
         "Tempo of this song",
         onCancel,
-        actions = { TextButton("Load", onClick = { onLoad(if (unknown) null else bpm) }, selected = true) },
+        actions = { TextButton("Load", onClick = { onLoad(SongSetup(if (unknown) null else bpm, signature)) }, selected = true) },
     ) {
         Label(ref.name)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Label("Time signature", color = Palette.Muted)
+            Stepper(signature.numerator, { signature = signature.copy(numerator = it) }, 1..MAX_NUMERATOR)
+            ChoiceStepper(signature.denominator, DENOMINATORS, { signature = signature.copy(denominator = it) })
+        }
         Text(
-            "If you know the tempo, enter it: the beats are then found more reliably, " +
-                "above all for fast songs. It does not need to be exact.",
+            "If you know the tempo, enter it: the song gets a steady grid that you then slide onto its first beat. " +
+                "If you don't, you record it by tapping along.",
             color = Palette.Muted, fontSize = 13.sp,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

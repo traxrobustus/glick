@@ -23,12 +23,15 @@ sample by the audio thread, so its timing does not depend on the UI.
 - A choice of audio output device, with a dropout counter.
 - Everything is remembered: the app reopens with the settings, timer progress,
   window and song it was closed with.
-- A song view: load a WAV, FLAC or MP3 file, and glick finds its beats, bars
-  and a tentative time signature. Move, add or delete beats, set bar starts
-  and signature changes, and loop any range of bars. Then either the click
-  follows the song's tempo, or the song is time-stretched (without changing
-  its pitch) to the click. Tempo changes, including those made by the circle
-  timer, keep both in sync. Each song's map is saved automatically.
+- A song view: load a WAV, FLAC or MP3 file and give it beats. If you know
+  its tempo, it gets a steady grid that you slide onto the first beat; if
+  not, you record the tempo by tapping along while it plays. Taps can be
+  snapped to the nearest attacks or smoothed. Automatic detection is there
+  as an option. Move, add or delete beats, set bar starts and signature
+  changes, and loop any range of bars. Then either the click follows the
+  song's tempo, or the song is time-stretched (without changing its pitch)
+  to the click. Tempo changes, including those made by the circle timer,
+  keep both in sync. Each song's map is saved automatically.
 
 MIDI clock sync has a panel but is not connected yet.
 

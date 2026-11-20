@@ -96,6 +96,10 @@ class Metronome(
     /** In "click follows song" mode: how much faster than the song's own tempo the click runs. */
     private var songSpeed = 1.0
 
+    /** While true no click sounds; the transport runs on. Used while a song's tempo is being tapped. */
+    @Volatile
+    var clickMuted: Boolean = false
+
     /** The decoded audio of the loaded song, for whoever renders sound. */
     @Volatile
     var songAudio: AudioSource? = null
@@ -321,7 +325,8 @@ class Metronome(
     }
 
     /** Returns true when the click was stopped during this span. */
-    private fun advanceLocked(dtNanos: Double, sink: ClickSink?): Boolean = synchronized(lock) {
+    private fun advanceLocked(dtNanos: Double, clicks: ClickSink?): Boolean = synchronized(lock) {
+        val sink = clicks.takeUnless { clickMuted }
         val start = _transport.value
         if (!start.playing || dtNanos <= 0) return false
 

@@ -144,7 +144,15 @@ fun CheckRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit, modifi
                 .clip(RoundedCornerShape(4.dp))
                 .background(if (checked) Palette.Beat else Palette.Inset)
                 .border(1.dp, if (checked) Palette.Beat else Palette.Outline, RoundedCornerShape(4.dp)),
-        )
+        ) {
+            if (checked) {
+                Canvas(Modifier.size(16.dp)) {
+                    val stroke = 2.dp.toPx()
+                    drawLine(Palette.Inset, Offset(size.width * 0.22f, size.height * 0.52f), Offset(size.width * 0.43f, size.height * 0.72f), stroke)
+                    drawLine(Palette.Inset, Offset(size.width * 0.43f, size.height * 0.72f), Offset(size.width * 0.78f, size.height * 0.28f), stroke)
+                }
+            }
+        }
         Label(text)
     }
 }

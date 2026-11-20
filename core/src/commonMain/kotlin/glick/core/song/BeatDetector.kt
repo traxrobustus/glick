@@ -78,6 +78,9 @@ object BeatDetector {
      */
     private const val PEAK_LEAD = 0.6
 
+    /** An onset counts as an attack when it is at least this strong, in units of the song's average onset strength. */
+    private const val ATTACK_STRENGTH = 1.0
+
     /** How many beat intervals next to an end of the music set the interval continued past it. */
     private const val NEARBY = 8
 
@@ -142,6 +145,21 @@ object BeatDetector {
         }
         progress(1f)
         return detection
+    }
+
+    /**
+     * The times, in seconds, of the clearly audible attacks in [source]: drum
+     * hits, plucked and struck notes. Used to pull hand-placed beats onto the
+     * sound they were meant for.
+     */
+    fun attacks(source: AudioSource, progress: (Float) -> Unit = {}): List<Double> {
+        val frames = OnsetFrames.analyse(source, progress)
+        val rate = frames.framesPerSecond
+        val envelope = onsetEnvelope(frames.flux, rate) ?: return emptyList()
+        val flux = frames.flux
+        return (1 until envelope.size - 1)
+            .filter { envelope[it] >= ATTACK_STRENGTH && envelope[it] > envelope[it - 1] && envelope[it] >= envelope[it + 1] }
+            .map { (it + peakOffset(flux[it - 1].toDouble(), flux[it].toDouble(), flux[it + 1].toDouble()) + PEAK_LEAD) / rate }
     }
 
     /**

@@ -1,7 +1,9 @@
 package glick.core.song
 
 import glick.core.Metronome
+import glick.core.SongMode
 import glick.core.SongRef
+import glick.core.TimeSignature
 import glick.core.TextStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,9 +28,15 @@ data class SongView(
     val durationSeconds: Double = 0.0,
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
+    /** True while the tempo is being recorded by tapping; [taps] are the beats tapped so far. */
+    val recording: Boolean = false,
+    val taps: List<Double> = emptyList(),
 ) {
     val ready: Boolean get() = grid != null && peaks != null
 }
+
+/** What the user said about a song when opening it. */
+data class SongSetup(val knownBpm: Double?, val signature: TimeSignature)
 
 /**
  * The song being worked on: loads it, finds its beats, applies the user's
@@ -47,17 +55,22 @@ class SongSession(
     private var loading: Job? = null
     private var saving: Job? = null
     private var source: AudioSource? = null
+    private var attacks: List<Double>? = null
+    private var modeBeforeRecording = SongMode.ClickFollowsSong
+    private var bpmBeforeRecording = 120.0
     private val undone = ArrayDeque<SongGrid>()
     private val history = ArrayDeque<SongGrid>()
 
-    /** True when [ref] was opened before and its beat map is on file, so nothing needs detecting. */
+    /** True when [ref] was opened before and its beat map is on file, so nothing needs asking. */
     fun hasMap(ref: SongRef): Boolean = SongGrid.decode(store.read(projectName(ref))) != null
 
     /**
-     * Opens [ref] for playback at [sampleRate]. A saved map is reused;
-     * otherwise beats are detected, near [knownBpm] when the tempo is known.
+     * Opens [ref] for playback at [sampleRate]. A saved map is reused.
+     * Otherwise [setup] decides: with a known tempo the song gets a steady
+     * grid, to be slid into place; without one it gets a placeholder grid and
+     * waits for its tempo to be recorded by tapping.
      */
-    fun load(ref: SongRef, sampleRate: Int, knownBpm: Double? = null) {
+    fun load(ref: SongRef, sampleRate: Int, setup: SongSetup? = null) {
         loading?.cancel()
         detach()
         history.clear()
@@ -69,17 +82,16 @@ class SongSession(
                     library.open(ref, sampleRate) { p -> report("Reading the audio", p) }
                 }
                 val peaks = withContext(Dispatchers.Default) { WaveformPeaks.of(audio) }
+                val duration = audio.frames.toDouble() / audio.sampleRate
                 val saved = SongGrid.decode(store.read(projectName(ref)))
-                val grid = saved ?: withContext(Dispatchers.Default) {
-                    SongGrid.of(BeatDetector.detect(audio, knownBpm) { p -> report("Finding the beats", p) }).copy(knownBpm = knownBpm)
-                }
+                val blank = SongGrid(signatures = listOf(SignatureChange(0, setup?.signature ?: TimeSignature())))
+                val grid = saved
+                    ?: setup?.knownBpm?.let { blank.steadyAt(it, peaks.firstSoundSeconds(), duration) }
+                    ?: blank.placeholder(duration)
                 source = audio
                 metronome.songAudio = audio
                 metronome.setSong(SongTimeline(grid), resetSpeed = true)
-                _view.value = SongView(
-                    ref = ref, grid = grid, peaks = peaks,
-                    durationSeconds = audio.frames.toDouble() / audio.sampleRate,
-                )
+                _view.value = SongView(ref = ref, grid = grid, peaks = peaks, durationSeconds = duration)
                 if (saved == null) save(ref, grid)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -88,6 +100,76 @@ class SongSession(
             }
         }
     }
+
+    /** An even grid that only lets the song play; it says nothing about the music. */
+    private fun SongGrid.placeholder(duration: Double): SongGrid =
+        steadyAt(PLACEHOLDER_BPM, 0.0, duration).copy(knownBpm = null, firstBeat = null, unmapped = true)
+
+    /** Replaces the beats by a steady grid at [bpm] whose bar 1 starts at [firstBeat]. */
+    fun setSteady(bpm: Double, firstBeat: Double) {
+        val duration = _view.value.durationSeconds
+        edit { it.steadyAt(bpm, firstBeat, duration) }
+    }
+
+    /**
+     * Starts a tempo recording: the song plays from its start at its own
+     * speed with the click silent, and every [tap] marks a beat.
+     */
+    fun startRecording() {
+        val view = _view.value
+        if (!view.ready || view.recording) return
+        metronome.stop()
+        val state = metronome.state.value
+        modeBeforeRecording = state.songMode
+        bpmBeforeRecording = state.bpm
+        metronome.clickMuted = true
+        metronome.update { it.copy(songMode = SongMode.ClickFollowsSong) }
+        metronome.setSong(SongTimeline(SongGrid().placeholder(view.durationSeconds)), resetSpeed = true)
+        _view.value = view.copy(recording = true, taps = emptyList())
+        metronome.play()
+    }
+
+    /**
+     * Marks a beat at what is being heard right now. [outputDelaySeconds] is
+     * how long rendered sound takes to reach the speaker.
+     */
+    fun tap(outputDelaySeconds: Double) {
+        val view = _view.value
+        if (!view.recording) return
+        val at = metronome.transport.value.songSeconds - outputDelaySeconds
+        val last = view.taps.lastOrNull()
+        when {
+            at < 0 -> return
+            // The song ran past its end and started again: the recording is over.
+            last != null && at < last - 1.0 -> stopRecording()
+            last == null || at > last + 0.1 -> _view.value = view.copy(taps = view.taps + at)
+        }
+    }
+
+    /** Ends the recording and turns the taps into the song's beats. Fewer than two taps change nothing. */
+    fun stopRecording() {
+        val view = _view.value
+        if (!view.recording) return
+        metronome.stop()
+        metronome.clickMuted = false
+        metronome.update { it.copy(songMode = modeBeforeRecording, bpm = bpmBeforeRecording) }
+        _view.value = view.copy(recording = false, taps = emptyList())
+        val grid = view.grid ?: return
+        val recorded = grid.withTaps(view.taps, view.durationSeconds)
+        if (recorded == grid) metronome.setSong(SongTimeline(grid), resetSpeed = true)
+        else edit { recorded }
+    }
+
+    /** Pulls the tapped beats onto the nearest audible attacks. */
+    fun snapTaps() {
+        val audio = source ?: return
+        scope.launch {
+            val found = attacks ?: withContext(Dispatchers.Default) { BeatDetector.attacks(audio) }.also { attacks = it }
+            if (source === audio) edit { it.snappedTo(found) }
+        }
+    }
+
+    fun smoothTaps() = edit { it.smoothed() }
 
     /** The sample rate the loaded song was prepared for, or 0 when none is loaded. */
     val preparedSampleRate: Int get() = source?.sampleRate ?: 0
@@ -102,7 +184,7 @@ class SongSession(
     /** Applies one edit to the grid. */
     fun edit(transform: (SongGrid) -> SongGrid) {
         val current = _view.value.grid ?: return
-        val changed = transform(current).sanitized()
+        val changed = transform(current).sanitized().copy(unmapped = false)
         if (changed == current) return
         history.addLast(current)
         if (history.size > MAX_UNDO) history.removeFirst()
@@ -169,6 +251,8 @@ class SongSession(
     }
 
     private fun detach() {
+        metronome.clickMuted = false
+        attacks = null
         metronome.setSong(null)
         metronome.songAudio = null
         source = null
@@ -182,6 +266,7 @@ class SongSession(
     private companion object {
         const val MAX_UNDO = 100
         const val SAVE_DELAY_MILLIS = 400L
+        const val PLACEHOLDER_BPM = 120.0
 
         /** A file name for the song's map, from a hash of its locator. */
         fun projectName(ref: SongRef): String {

@@ -47,7 +47,9 @@ fun main() = application {
         state = windowState,
         onKeyEvent = { event ->
             if (event.key == Key.Spacebar && event.type == KeyEventType.KeyDown) {
-                app.metronome.toggle()
+                // While a tempo is being recorded the space bar taps the beat.
+                if (app.song.view.value.recording) app.song.tap(app.audio.status.value.latencyMillis / 1000.0)
+                else app.metronome.toggle()
                 true
             } else false
         },

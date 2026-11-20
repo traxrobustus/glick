@@ -150,6 +150,7 @@ fun App(
                         SongPanel(
                             song, metronome, state, { transport.value }, pickSong,
                             onOpen = { ref -> if (song.hasMap(ref)) song.load(ref, sampleRate) else tempoQuestion = ref },
+                            outputDelayMillis = if (audioRunning) audioStatus?.latencyMillis ?: 0 else 0,
                             compact, m.then(dim),
                         )
                     }
@@ -208,9 +209,10 @@ fun App(
             tempoQuestion?.let { ref ->
                 SongTempoOverlay(
                     ref,
-                    onLoad = { knownBpm ->
+                    initialSignature = state.signature,
+                    onLoad = { setup ->
                         tempoQuestion = null
-                        song?.load(ref, sampleRate, knownBpm)
+                        song?.load(ref, sampleRate, setup)
                     },
                     onCancel = { tempoQuestion = null },
                 )
