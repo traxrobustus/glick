@@ -21,6 +21,8 @@ sample by the audio thread, so its timing does not depend on the UI.
 - A sleep mode: a plain 40 BPM click.
 - An activity log of every run.
 - A choice of audio output device, with a dropout counter.
+- On Android the click keeps playing with the screen locked or the app in the
+  background, with a notification to stop it.
 - Everything is remembered: the app reopens with the settings, timer progress,
   window and song it was closed with.
 - A song view: load a WAV, FLAC or MP3 file and give it beats. If you know

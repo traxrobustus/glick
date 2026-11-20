@@ -1,6 +1,9 @@
 package glick.android
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
+import android.os.Build
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -24,6 +27,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -54,6 +60,14 @@ class GlickApplication : Application() {
         audio = AndroidAudio(this, metronome)
         song = SongSession(metronome, CachingSongLibrary(AndroidAudioDecoder(this), File(cacheDir, "songs")), documents, scope)
         keeper = SnapshotKeeper(metronome, song, documents, scope)
+        // While the click plays, a foreground service keeps the app alive behind a locked screen.
+        scope.launch {
+            var serviceUp = false
+            metronome.transport.map { it.playing }.distinctUntilChanged().collect { playing ->
+                if (playing || serviceUp) PlaybackService.follow(this@GlickApplication, playing)
+                serviceUp = playing
+            }
+        }
         snapshot?.song?.let { song.load(it, audio.status.value.sampleRate.takeIf { rate -> rate > 0 } ?: 48_000) }
     }
 
@@ -84,8 +98,16 @@ class MainActivity : ComponentActivity() {
         return result.await()
     }
 
+    // Android 13 and later only show the "glick is playing" notification if the user agrees.
+    private val notifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val app = application as GlickApplication
