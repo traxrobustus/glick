@@ -35,7 +35,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -391,6 +393,7 @@ private fun Waveform(
             Modifier
                 .fillMaxWidth()
                 .height(34.dp)
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .pointerInput(view.ref) {
                     detectTapGestures { if (!currentGrid.unmapped) onSelect(nearestBeat(it.x, 22.dp.toPx())) }
                 }
@@ -424,10 +427,12 @@ private fun Waveform(
 
         // The waveform. Drag to scroll, pinch to zoom, double-tap to add a beat.
         Box {
+        // Kept as a picture of its own, so the moving playhead does not make it draw again.
         Canvas(
             Modifier
                 .fillMaxWidth()
                 .height(height)
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .pointerInput(view.ref) {
                     detectTransformGestures { centroid, pan, zoom, _ ->
                         if (zoom != 1f) port.zoom(1.0 / zoom, centroid.x, duration)
@@ -481,6 +486,7 @@ private fun Waveform(
             Modifier
                 .fillMaxWidth()
                 .height(34.dp)
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .pointerInput(view.ref) {
                     detectDragGestures(
                         onDragStart = { at ->
