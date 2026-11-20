@@ -1,0 +1,137 @@
+name: Release
+
+# Pushing a tag such as v1.0.0 builds every installer and publishes them as a
+# GitHub release. The tag must match glick.version in gradle.properties.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux packages and Android
+    runs-on: ubuntu-latest
+    env:
+      GLICK_KEYSTORE_BASE64: ${{ secrets.GLICK_KEYSTORE_BASE64 }}
+      GLICK_KEYSTORE_PASSWORD: ${{ secrets.GLICK_KEYSTORE_PASSWORD }}
+      GLICK_KEY_ALIAS: ${{ secrets.GLICK_KEY_ALIAS }}
+      GLICK_KEY_PASSWORD: ${{ secrets.GLICK_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Read the version
+        id: version
+        run: |
+          version=$(grep '^glick.version=' gradle.properties | cut -d= -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match glick.version=$version in gradle.properties"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install the packaging tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q rpm fakeroot
+
+      - name: Prepare the Android release key
+        id: key
+        run: |
+          if [ -n "$GLICK_KEYSTORE_BASE64" ]; then
+            echo "$GLICK_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "GLICK_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No GLICK_KEYSTORE_BASE64 secret: the APK is signed with a debug key and no Play Store bundle is published."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check and test
+        run: ./gradlew check --console=plain
+
+      - name: Build the packages
+        run: >
+          ./gradlew :app:createDistributable :app:packageDeb :app:packageRpm
+          :androidApp:assembleRelease :androidApp:bundleRelease --console=plain
+
+      - name: Collect the files
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SIGNED: ${{ steps.key.outputs.signed }}
+        run: |
+          mkdir dist
+          packaging/linux/portable-deb.sh app/build/compose/binaries/main/deb/*.deb "dist/glick-$VERSION-linux-amd64.deb"
+          cp app/build/compose/binaries/main/rpm/*.rpm "dist/glick-$VERSION-linux-x86_64.rpm"
+          packaging/linux/build-installer.sh app/build/compose/binaries/main/app/glick "$VERSION" "dist/glick-$VERSION-linux-x64.run"
+          if [ "$SIGNED" = "true" ]; then
+            cp androidApp/build/outputs/apk/release/androidApp-release.apk "dist/glick-$VERSION-android.apk"
+            cp androidApp/build/outputs/bundle/release/androidApp-release.aab "dist/glick-$VERSION-google-play.aab"
+          else
+            cp androidApp/build/outputs/apk/release/androidApp-release.apk "dist/glick-$VERSION-android-debug-signed.apk"
+          fi
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux
+          path: dist/
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test
+        run: ./gradlew :core:jvmTest :core:mingwX64Test --console=plain
+
+      - name: Build the installer
+        run: ./gradlew :app:packageMsi --console=plain
+
+      - name: Collect the file
+        shell: bash
+        run: |
+          version=$(grep '^glick.version=' gradle.properties | cut -d= -f2)
+          mkdir dist
+          cp app/build/compose/binaries/main/msi/*.msi "dist/glick-$version-windows-x64.msi"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" * \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "glick ${GITHUB_REF_NAME#v}" \
+            --generate-notes
