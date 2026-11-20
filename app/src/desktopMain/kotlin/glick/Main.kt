@@ -1,6 +1,8 @@
 package glick
 
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -36,6 +38,7 @@ fun main() = application {
             exitApplication()
         },
         title = "glick",
+        icon = remember { appIcon() },
         state = rememberWindowState(size = DpSize(1440.dp, 860.dp)),
         onKeyEvent = { event ->
             if (event.key == Key.Spacebar && event.type == KeyEventType.KeyDown) {
@@ -46,4 +49,10 @@ fun main() = application {
     ) {
         App(metronome, midiPorts = ::midiInputPorts, audio = audio)
     }
+}
+
+/** The window and taskbar icon, so the platform's default Java icon never shows. */
+private fun appIcon(): BitmapPainter {
+    val bytes = checkNotNull(object {}.javaClass.getResourceAsStream("/icon.png")) { "icon.png is missing" }.use { it.readBytes() }
+    return BitmapPainter(org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap())
 }

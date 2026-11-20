@@ -10,7 +10,7 @@ plugins {
 
 kotlin {
     jvm("desktop")
-    androidLibrary {
+    android {
         namespace = "glick.ui"
         compileSdk = 37
         minSdk = 26
@@ -25,7 +25,7 @@ kotlin {
             implementation(libs.compose.ui)
             implementation(libs.compose.material3)
         }
-        val desktopMain by getting {
+        named("desktopMain") {
             dependencies {
                 implementation(compose.desktop.currentOs)
                 implementation(libs.kotlinx.coroutines.swing)
@@ -41,10 +41,31 @@ compose.desktop {
         // audio buffer, so drawing the UI cannot make the click stutter.
         jvmArgs += listOf("-XX:+UseZGC", "-XX:+IgnoreUnrecognizedVMOptions", "-XX:+ZGenerational")
         nativeDistributions {
-            targetFormats(TargetFormat.Deb, TargetFormat.Msi)
+            targetFormats(TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi)
             packageName = "glick"
-            packageVersion = "1.0.0"
+            packageVersion = providers.gradleProperty("glick.version").get()
+            description = "Metronome with polyrhythms, subdivisions and practice timers"
+            vendor = "traxrobustus"
             modules("java.desktop")
+
+            val icons = rootProject.layout.projectDirectory.dir("packaging/icons")
+            linux {
+                iconFile.set(icons.file("glick.png"))
+                shortcut = true
+                menuGroup = "AudioVideo"
+                appCategory = "sound"
+                debMaintainer = "traxrobustus@users.noreply.github.com"
+            }
+            windows {
+                iconFile.set(icons.file("glick.ico"))
+                shortcut = true
+                menu = true
+                menuGroup = "glick"
+                perUserInstall = true
+                dirChooser = true
+                // Fixed so that a newer installer upgrades an older install in place.
+                upgradeUuid = "6f2c1f4e-8a3b-4d2a-9c57-0b7e5a1d4c3f"
+            }
         }
     }
 }
