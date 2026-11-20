@@ -694,6 +694,8 @@ private fun FirstBeatAligner(
                 .height(110.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Palette.Inset)
+                // Cached like the main waveform: it changes only while it is being glided.
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .pointerInput(bpm, beatsShown) {
                     detectDragGestures(
                         onDragEnd = { change(bpm, pending) },
