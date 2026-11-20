@@ -42,7 +42,7 @@ import glick.core.StepState
 import glick.core.Transport
 import kotlin.math.ceil
 
-private val ControlsWidth = 270.dp
+private val ControlsWidth = 300.dp
 private val LaneHeight = 50.dp
 
 /**
@@ -96,6 +96,7 @@ fun Sequencer(
                 }
                 Label("Click", Modifier.width(44.dp))
                 Box(Modifier.width(94.dp))
+                MuteAll(state.beatSteps) { steps -> update { it.copy(beatSteps = steps) } }
                 LevelSlider(state.beatLevel, { v -> update { it.copy(beatLevel = v) } }, Modifier.weight(1f))
             },
         ) { gridModifier ->
@@ -120,6 +121,7 @@ fun Sequencer(
                     Toggle(line.enabled, { v -> update { s -> s.withSub(i) { it.copy(enabled = v) } } }, Palette.Sub)
                     Label("Sub ${i + 1}", Modifier.width(44.dp))
                     Stepper(line.division, { v -> update { s -> s.withSub(i) { it.copy(division = v) } } }, 1..MAX_DIVISION)
+                    MuteAll(line.steps) { steps -> update { s -> s.withSub(i) { it.copy(steps = steps) } } }
                     LevelSlider(
                         line.level, { v -> update { s -> s.withSub(i) { it.copy(level = v) } } },
                         Modifier.weight(1f), Palette.Sub,
@@ -151,6 +153,7 @@ fun Sequencer(
                     Toggle(voice.enabled, { v -> update { s -> s.withPoly(i) { it.copy(enabled = v) } } }, Palette.Poly)
                     Label("${voice.pulses}:$beats", Modifier.width(44.dp))
                     Stepper(voice.pulses, { v -> update { s -> s.withPoly(i) { it.copy(pulses = v) } } }, 1..MAX_POLY_PULSES)
+                    MuteAll(voice.steps) { steps -> update { s -> s.withPoly(i) { it.copy(steps = steps) } } }
                     LevelSlider(
                         voice.level, { v -> update { s -> s.withPoly(i) { it.copy(level = v) } } },
                         Modifier.weight(1f), Palette.Poly,
@@ -171,6 +174,23 @@ fun Sequencer(
             }
         }
     }
+}
+
+/**
+ * Mutes every step of a lane, ready for switching on only the wanted ones.
+ * When the lane is already fully muted it restores every step to normal.
+ */
+@Composable
+private fun MuteAll(steps: List<StepState>, onChange: (List<StepState>) -> Unit) {
+    val allMuted = steps.isNotEmpty() && steps.all { it == StepState.Mute }
+    TextButton(
+        "M",
+        onClick = { onChange(steps.map { if (allMuted) StepState.Normal else StepState.Mute }) },
+        modifier = Modifier.width(24.dp),
+        selected = allMuted,
+        color = Palette.Muted,
+        horizontalPadding = 0.dp,
+    )
 }
 
 private fun List<StepState>.cycled(index: Int): List<StepState> =

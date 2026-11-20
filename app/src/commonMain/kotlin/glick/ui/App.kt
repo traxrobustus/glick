@@ -111,7 +111,7 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
                 val silence = @Composable { m: Modifier -> SilencePanel(state, metronome::update, m.then(dim)) }
                 val sequencer = @Composable { m: Modifier ->
                     Panel(
-                        "Pattern · tap a step: normal, accent, mute",
+                        "Pattern · tap a step: normal, accent, mute · M mutes a lane",
                         m.then(dim),
                         trailing = { TextButton("Patterns", onClick = { showPatterns = true }) },
                     ) {
