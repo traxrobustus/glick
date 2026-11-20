@@ -50,8 +50,14 @@ class SongSession(
     private val undone = ArrayDeque<SongGrid>()
     private val history = ArrayDeque<SongGrid>()
 
-    /** Opens [ref] for playback at [sampleRate]. A saved map is reused; otherwise beats are detected. */
-    fun load(ref: SongRef, sampleRate: Int) {
+    /** True when [ref] was opened before and its beat map is on file, so nothing needs detecting. */
+    fun hasMap(ref: SongRef): Boolean = SongGrid.decode(store.read(projectName(ref))) != null
+
+    /**
+     * Opens [ref] for playback at [sampleRate]. A saved map is reused;
+     * otherwise beats are detected, near [knownBpm] when the tempo is known.
+     */
+    fun load(ref: SongRef, sampleRate: Int, knownBpm: Double? = null) {
         loading?.cancel()
         detach()
         history.clear()
@@ -65,7 +71,7 @@ class SongSession(
                 val peaks = withContext(Dispatchers.Default) { WaveformPeaks.of(audio) }
                 val saved = SongGrid.decode(store.read(projectName(ref)))
                 val grid = saved ?: withContext(Dispatchers.Default) {
-                    SongGrid.of(BeatDetector.detect(audio) { p -> report("Finding the beats", p) })
+                    SongGrid.of(BeatDetector.detect(audio, knownBpm) { p -> report("Finding the beats", p) }).copy(knownBpm = knownBpm)
                 }
                 source = audio
                 metronome.songAudio = audio

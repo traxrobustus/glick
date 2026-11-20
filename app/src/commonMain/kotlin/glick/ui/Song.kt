@@ -86,7 +86,7 @@ fun SongPanel(
     state: MetronomeState,
     transport: () -> Transport,
     pickSong: suspend () -> SongRef?,
-    sampleRate: Int,
+    onOpen: (SongRef) -> Unit,
     compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -104,7 +104,7 @@ fun SongPanel(
                 if (view.ref != null) TextButton("Close song", onClick = session::close)
                 TextButton(
                     "Open audio file",
-                    onClick = { scope.launch { pickSong()?.let { session.load(it, sampleRate) } } },
+                    onClick = { scope.launch { pickSong()?.let(onOpen) } },
                     selected = view.ref == null,
                 )
             }
@@ -533,5 +533,36 @@ private fun DrawScope.drawMarkers(port: Viewport, grid: SongGrid, timeline: Song
         }
         if (beat.pinned || i == selected) drawCircle(color, radius, centre)
         else drawCircle(color, radius, centre, style = androidx.compose.ui.graphics.drawscope.Stroke(1.5.dp.toPx()))
+    }
+}
+
+/**
+ * Asked when a song is opened for the first time: its tempo, if the user
+ * knows it, gives beat detection a starting point.
+ */
+@Composable
+fun SongTempoOverlay(ref: SongRef, onLoad: (knownBpm: Double?) -> Unit, onCancel: () -> Unit) {
+    var unknown by remember(ref) { mutableStateOf(true) }
+    var bpm by remember(ref) { mutableDoubleStateOf(120.0) }
+    Overlay(
+        "Tempo of this song",
+        onCancel,
+        actions = { TextButton("Load", onClick = { onLoad(if (unknown) null else bpm) }, selected = true) },
+    ) {
+        Label(ref.name)
+        Text(
+            "If you know the tempo, enter it: the beats are then found more reliably, " +
+                "above all for fast songs. It does not need to be exact.",
+            color = Palette.Muted, fontSize = 13.sp,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            NumberField(
+                bpm,
+                { bpm = it; unknown = false },
+                BeatDetector.MIN_KNOWN_BPM, BeatDetector.MAX_KNOWN_BPM, decimals = 2, width = 90.dp,
+            )
+            Label("BPM", color = if (unknown) Palette.Muted else Palette.Text)
+        }
+        CheckRow("I don't know the tempo", unknown, { unknown = it })
     }
 }

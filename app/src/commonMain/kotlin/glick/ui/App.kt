@@ -61,6 +61,8 @@ fun App(
     var showAudio by remember { mutableStateOf(false) }
     var showPatterns by remember { mutableStateOf(false) }
     var showSong by remember { mutableStateOf(false) }
+    // A song opened for the first time, waiting for the user to say whether its tempo is known.
+    var tempoQuestion by remember { mutableStateOf<SongRef?>(null) }
     val audioStatus = audio?.status?.collectAsState()?.value
     val audioRunning = audioStatus?.running == true
 
@@ -145,7 +147,11 @@ fun App(
                 val midi = @Composable { m: Modifier -> MidiPanel(state, metronome::update, midiPorts, m.then(dim)) }
                 val songView = @Composable { m: Modifier ->
                     if (song != null && pickSong != null) {
-                        SongPanel(song, metronome, state, { transport.value }, pickSong, sampleRate, compact, m.then(dim))
+                        SongPanel(
+                            song, metronome, state, { transport.value }, pickSong,
+                            onOpen = { ref -> if (song.hasMap(ref)) song.load(ref, sampleRate) else tempoQuestion = ref },
+                            compact, m.then(dim),
+                        )
                     }
                 }
                 val wide = Modifier.fillMaxWidth()
@@ -199,6 +205,16 @@ fun App(
             if (showLog) LogOverlay(metronome) { showLog = false }
             if (showPatterns) PatternOverlay(metronome) { showPatterns = false }
             if (showAudio && audio != null) AudioOverlay(audio) { showAudio = false }
+            tempoQuestion?.let { ref ->
+                SongTempoOverlay(
+                    ref,
+                    onLoad = { knownBpm ->
+                        tempoQuestion = null
+                        song?.load(ref, sampleRate, knownBpm)
+                    },
+                    onCancel = { tempoQuestion = null },
+                )
+            }
         }
     }
 }
