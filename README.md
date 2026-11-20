@@ -76,3 +76,7 @@ Play Store bundle is published. For a local release build, put
 
 glick was conceived and directed by [@traxrobustus](https://github.com/traxrobustus),
 and written with Claude Code.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

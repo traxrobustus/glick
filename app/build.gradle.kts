@@ -46,6 +46,7 @@ compose.desktop {
             packageVersion = providers.gradleProperty("glick.version").get()
             description = "Metronome with polyrhythms, subdivisions and practice timers"
             vendor = "traxrobustus"
+            licenseFile.set(rootProject.layout.projectDirectory.file("LICENSE"))
             modules("java.desktop")
 
             val icons = rootProject.layout.projectDirectory.dir("packaging/icons")
