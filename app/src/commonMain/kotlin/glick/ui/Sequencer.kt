@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import glick.core.MAX_DIVISION
 import glick.core.MAX_POLY_PULSES
 import glick.core.MetronomeState
+import glick.core.SLEEP_BPM
 import glick.core.StepState
 import glick.core.Transport
 import kotlin.math.ceil
@@ -59,14 +60,22 @@ fun Sequencer(
     update: ((MetronomeState) -> MetronomeState) -> Unit,
     compact: Boolean,
     modifier: Modifier = Modifier,
+    /** How long a rendered click takes to reach the speaker; the playhead waits that long. */
+    outputDelayMillis: Int = 0,
 ) {
     val measurer = rememberTextMeasurer(cacheSize = 160)
     val beats = state.signature.numerator
 
     /** Position in the bar from 0 until 1, or -1 when stopped. */
+    val delayBeats = outputDelayMillis / 60_000.0 * (if (sleep) SLEEP_BPM else state.bpm)
     val barPhase = {
         val t = transport()
-        if (t.playing) (t.beat + t.beatPhase) / beats else -1.0
+        val position = t.beat + t.beatPhase - delayBeats
+        when {
+            !t.playing -> -1.0
+            position < 0 && t.bar == 0L -> -1.0 // the first click has not reached the speaker yet
+            else -> ((position % beats) + beats) % beats / beats
+        }
     }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {

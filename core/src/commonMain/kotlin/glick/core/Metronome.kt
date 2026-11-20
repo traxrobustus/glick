@@ -76,6 +76,16 @@ class Metronome(
     private var nextActionId = 1L
     private val lock = SynchronizedObject()
 
+    // Disk writes are queued under [lock] and run after it is released, so the
+    // audio thread never waits for the file system.
+    private val ioLock = SynchronizedObject()
+    private val pendingIo = mutableListOf<() -> Unit>()
+
+    private fun flushIo() = synchronized(ioLock) {
+        val jobs = synchronized(lock) { pendingIo.toList().also { pendingIo.clear() } }
+        jobs.forEach { it() }
+    }
+
     fun update(transform: (MetronomeState) -> MetronomeState): Unit = synchronized(lock) {
         updateLocked(transform)
     }
@@ -89,7 +99,8 @@ class Metronome(
         if (new.circle.enabled != old.circle.enabled || new.circle.mode != old.circle.mode) resetCircleLocked()
         val numerator = new.effective().signature.numerator
         val t = _transport.value
-        if (t.beat >= numerator) _transport.value = t.copy(beat = 0, beatPhase = 0.0)
+        // A shorter bar wraps the beat counter but keeps the phase, so the pulse never jumps.
+        if (t.beat >= numerator) _transport.value = t.copy(beat = t.beat % numerator)
         publishTimers()
     }
 
@@ -98,11 +109,15 @@ class Metronome(
     }
 
     /** Saves the current pattern under [name], replacing any pattern of that name. */
-    fun savePattern(name: String): Unit = synchronized(lock) {
-        val pattern = Pattern.of(name, _state.value)
-        if (pattern.name.isEmpty()) return
-        _patterns.value = _patterns.value.filter { it.name != pattern.name } + pattern
-        patternStore.save(_patterns.value)
+    fun savePattern(name: String) {
+        synchronized(lock) {
+            val pattern = Pattern.of(name, _state.value)
+            if (pattern.name.isEmpty()) return
+            val all = _patterns.value.filter { it.name != pattern.name } + pattern
+            _patterns.value = all
+            pendingIo += { patternStore.save(all) }
+        }
+        flushIo()
     }
 
     fun loadPattern(name: String): Unit = synchronized(lock) {
@@ -110,9 +125,13 @@ class Metronome(
         updateLocked(pattern::applyTo)
     }
 
-    fun deletePattern(name: String): Unit = synchronized(lock) {
-        _patterns.value = _patterns.value.filter { it.name != name }
-        patternStore.save(_patterns.value)
+    fun deletePattern(name: String) {
+        synchronized(lock) {
+            val all = _patterns.value.filter { it.name != name }
+            _patterns.value = all
+            pendingIo += { patternStore.save(all) }
+        }
+        flushIo()
     }
 
     fun play(): Unit = synchronized(lock) { playLocked() }
@@ -135,7 +154,10 @@ class Metronome(
     }
 
     /** Stops the click. Both timers keep their progress until reset. */
-    fun stop(): Unit = synchronized(lock) { stopLocked() }
+    fun stop() {
+        synchronized(lock) { stopLocked() }
+        flushIo()
+    }
 
     private fun stopLocked() {
         val t = _transport.value
@@ -150,11 +172,14 @@ class Metronome(
             signature = s.signature.toString(),
             sleepMode = s.sleepMode,
         )
-        logStore.append(entry)
+        pendingIo += { logStore.append(entry) }
         _log.value = _log.value + entry
     }
 
-    fun toggle(): Unit = synchronized(lock) { if (_transport.value.playing) stopLocked() else playLocked() }
+    fun toggle() {
+        synchronized(lock) { if (_transport.value.playing) stopLocked() else playLocked() }
+        flushIo()
+    }
 
     fun resetSession(): Unit = synchronized(lock) { resetSessionLocked() }
 
@@ -172,9 +197,12 @@ class Metronome(
         publishTimers()
     }
 
-    fun clearLog(): Unit = synchronized(lock) {
-        logStore.clear()
-        _log.value = emptyList()
+    fun clearLog() {
+        synchronized(lock) {
+            pendingIo += { logStore.clear() }
+            _log.value = emptyList()
+        }
+        flushIo()
     }
 
     fun advance(dtNanos: Long, sink: ClickSink? = null) = advance(dtNanos.toDouble(), sink)
@@ -183,9 +211,16 @@ class Metronome(
      * Moves the transport forward by [dtNanos] of real time and reports every
      * click that falls inside that span to [sink], with its exact offset.
      */
-    fun advance(dtNanos: Double, sink: ClickSink? = null): Unit = synchronized(lock) {
+    fun advance(dtNanos: Double, sink: ClickSink? = null) {
+        // Only a session timer running out stops the click from here; its log
+        // entry is then written once the lock is free.
+        if (advanceLocked(dtNanos, sink)) flushIo()
+    }
+
+    /** Returns true when the click was stopped during this span. */
+    private fun advanceLocked(dtNanos: Double, sink: ClickSink?): Boolean = synchronized(lock) {
         val start = _transport.value
-        if (!start.playing || dtNanos <= 0) return
+        if (!start.playing || dtNanos <= 0) return false
 
         var remaining = dtNanos
         var elapsed = 0.0
@@ -265,6 +300,7 @@ class Metronome(
         )
         publishTimers()
         if (stopRequested) stopLocked()
+        stopRequested
     }
 
     /**

@@ -100,6 +100,8 @@ data class AudioStatus(
     val latencyMillis: Int = 0,
     /** Why there is no sound, when [running] is false. */
     val error: String = "",
+    /** Times the device ran out of audio since it was opened; each one is an audible gap. */
+    val dropouts: Int = 0,
 )
 
 /** A platform's audio playback, as shown in the audio settings panel. */

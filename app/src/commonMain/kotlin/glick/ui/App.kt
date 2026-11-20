@@ -115,7 +115,10 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
                         m.then(dim),
                         trailing = { TextButton("Patterns", onClick = { showPatterns = true }) },
                     ) {
-                        Sequencer(state, state.sleepMode, { transport.value }, metronome::update, compact)
+                        Sequencer(
+                            state, state.sleepMode, { transport.value }, metronome::update, compact,
+                            outputDelayMillis = if (audioRunning) audioStatus?.latencyMillis ?: 0 else 0,
+                        )
                     }
                 }
                 val circle = @Composable { m: Modifier -> CirclePanel(state, transport, metronome, m.then(dim)) }

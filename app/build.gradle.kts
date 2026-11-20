@@ -37,6 +37,9 @@ kotlin {
 compose.desktop {
     application {
         mainClass = "glick.MainKt"
+        // A concurrent collector keeps garbage-collection pauses well under one
+        // audio buffer, so drawing the UI cannot make the click stutter.
+        jvmArgs += listOf("-XX:+UseZGC", "-XX:+IgnoreUnrecognizedVMOptions", "-XX:+ZGenerational")
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Msi)
             packageName = "glick"

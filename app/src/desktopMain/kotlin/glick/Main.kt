@@ -23,7 +23,12 @@ fun main() = application {
             patternStore = FilePatternStore(dataDirectory()),
         )
     }
-    val audio = remember { DesktopAudio(metronome, dataDirectory()) }
+    val audio = remember {
+        DesktopAudio(metronome, dataDirectory()).also {
+            // Lets a soak test start the click without touching the window.
+            if (System.getenv("GLICK_AUTOPLAY") == "1") metronome.play()
+        }
+    }
     Window(
         onCloseRequest = {
             metronome.stop() // closes the running log entry

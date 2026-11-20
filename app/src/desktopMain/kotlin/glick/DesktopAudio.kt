@@ -133,7 +133,18 @@ class DesktopAudio(private val metronome: Metronome, directory: File) : AudioOut
             val bytes = ByteArray(BLOCK_FRAMES * channels * 2)
             try {
                 line.start()
+                var primed = false
                 while (alive) {
+                    // An empty device buffer after it has been filled once means the
+                    // device ran dry: the listener heard a gap.
+                    val queued = line.bufferSize - line.available()
+                    if (!primed) {
+                        primed = queued > line.bufferSize / 2
+                    } else if (queued <= 0) {
+                        val now = status.value
+                        status.value = now.copy(dropouts = now.dropouts + 1)
+                        System.err.println("glick: audio dropout #${now.dropouts + 1}")
+                    }
                     engine.render(mono, BLOCK_FRAMES)
                     var at = 0
                     for (sample in mono) {
@@ -161,7 +172,9 @@ class DesktopAudio(private val metronome: Metronome, directory: File) : AudioOut
 
     private companion object {
         const val BLOCK_FRAMES = 256
-        const val BUFFER_FRAMES = 2048
+        // About 85 ms at 48 kHz: enough to ride out a busy moment on a desktop
+        // system. Click spacing does not depend on it; the display compensates.
+        const val BUFFER_FRAMES = 4096
 
         fun playbackMixers(): List<Mixer.Info> = AudioSystem.getMixerInfo().filter { info ->
             val mixer = runCatching { AudioSystem.getMixer(info) }.getOrNull() ?: return@filter false

@@ -452,6 +452,14 @@ fun AudioOverlay(audio: AudioOutput, onClose: () -> Unit) {
                 "Sound is on · ${status.sampleRate / 1000.0} kHz · about ${status.latencyMillis} ms of buffer",
                 color = Palette.Sub,
             )
+            if (status.dropouts > 0) {
+                Text(
+                    "${status.dropouts} dropout${if (status.dropouts == 1) "" else "s"} since this device was opened: " +
+                        "the computer was too busy to keep the sound flowing.",
+                    color = Palette.Accent,
+                    fontSize = 13.sp,
+                )
+            }
         } else {
             Text("No sound: ${status.error}", color = Palette.Accent, fontSize = 13.sp)
             Text(

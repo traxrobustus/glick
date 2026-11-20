@@ -156,4 +156,28 @@ class ClickEngineTest {
         m.deletePattern(pattern.name)
         assertTrue(m.patterns.value.isEmpty())
     }
+
+    @Test
+    fun editingWhilePlayingNeverMovesThePulse() {
+        val m = metronome(MetronomeState(bpm = 120.0, signature = TimeSignature(7, 8)))
+        val beatNanos = 60e9 / 120.0
+        val beats = mutableListOf<Double>()
+        var base = 0.0
+        m.play()
+        repeat(4000) { block ->
+            m.advance(5e6) { offset, voice, _, _ -> if (voice == Voices.BEAT) beats += (base + offset) / beatNanos }
+            base += 5e6
+            // Every edit the UI can make mid-beat: shorter and longer bars, step states, lanes, patterns.
+            when (block % 97) {
+                13 -> m.update { it.copy(signature = TimeSignature(3, 4)) }
+                31 -> m.update { it.copy(signature = TimeSignature(9, 8)) }
+                47 -> m.update { s -> s.copy(subdivisions = s.subdivisions.map { it.copy(enabled = !it.enabled, division = 5) }) }
+                59 -> m.savePattern("p")
+                71 -> m.update { it.copy(signature = TimeSignature(2, 4)) }
+                83 -> m.loadPattern("p")
+            }
+        }
+        assertTrue(beats.size > 30)
+        beats.forEachIndexed { i, t -> assertEquals(i.toDouble(), t, 1e-6, "beat $i") }
+    }
 }
