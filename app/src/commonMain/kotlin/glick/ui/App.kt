@@ -1,0 +1,139 @@
+package glick.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import glick.core.Metronome
+import glick.core.MidiPort
+import glick.core.SLEEP_BPM
+import kotlinx.coroutines.flow.StateFlow
+
+/** Local date and time of a log entry, e.g. "2026-11-20 14:03". */
+expect fun formatDateTime(epochMillis: Long): String
+
+@Composable
+internal fun <T> StateFlow<T>.collectAsStateCompat(): State<T> = collectAsState()
+
+@Composable
+fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>) {
+    val state by metronome.state.collectAsState()
+    val transport = metronome.transport.collectAsState()
+    val playing by remember { derivedStateOf { transport.value.playing } }
+    var showLog by remember { mutableStateOf(false) }
+
+    // Until the audio engine owns the clock, display frames drive the transport.
+    LaunchedEffect(metronome) {
+        var last = withFrameNanos { it }
+        while (true) {
+            val now = withFrameNanos { it }
+            metronome.advance(now - last)
+            last = now
+        }
+    }
+
+    val colors = darkColorScheme(
+        primary = Palette.Beat,
+        background = Palette.Background,
+        surface = Palette.Panel,
+        surfaceContainer = Palette.Panel,
+        onSurface = Palette.Text,
+    )
+    MaterialTheme(colorScheme = colors) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(Palette.Background)) {
+            val compact = maxWidth < 900.dp
+            val gap = Arrangement.spacedBy(12.dp)
+            val dim = Modifier.alpha(if (state.sleepMode) 0.4f else 1f)
+
+            Column(Modifier.fillMaxSize().padding(14.dp), gap) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("glick", color = Palette.Beat, fontSize = 22.sp, fontWeight = FontWeight.Black)
+                    Label(
+                        if (state.sleepMode) "Sleep mode · steady ${SLEEP_BPM.toInt()} BPM click"
+                        else "${formatNumber(state.bpm, 1)} BPM · ${state.signature}",
+                        Modifier.weight(1f),
+                        Palette.Muted,
+                    )
+                    TextButton(
+                        "Sleep mode",
+                        onClick = { metronome.update { it.copy(sleepMode = !it.sleepMode) } },
+                        selected = state.sleepMode,
+                        color = Palette.Poly,
+                    )
+                    TextButton("Activity log", onClick = { showLog = true })
+                }
+
+                val tempo = @Composable { m: Modifier -> TempoPanel(state, playing, metronome::update, metronome::toggle, m) }
+                val signature = @Composable { m: Modifier -> SignaturePanel(state, metronome::update, m.then(dim)) }
+                val silence = @Composable { m: Modifier -> SilencePanel(state, metronome::update, m.then(dim)) }
+                val sequencer = @Composable { m: Modifier ->
+                    Panel("Pattern · one bar", m.then(dim)) {
+                        Sequencer(state, state.sleepMode, { transport.value }, metronome::update, compact)
+                    }
+                }
+                val circle = @Composable { m: Modifier -> CirclePanel(state, transport, metronome, m.then(dim)) }
+                val session = @Composable { m: Modifier -> SessionPanel(state, transport, metronome, m) }
+                val midi = @Composable { m: Modifier -> MidiPanel(state, metronome::update, midiPorts, m.then(dim)) }
+                val wide = Modifier.fillMaxWidth()
+
+                if (compact) {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), gap) {
+                        tempo(wide); signature(wide); sequencer(wide); silence(wide)
+                        circle(wide); session(wide); midi(wide)
+                    }
+                } else {
+                    Row(Modifier.fillMaxSize(), gap) {
+                        Column(Modifier.width(290.dp).verticalScroll(rememberScrollState()), gap) {
+                            tempo(wide); signature(wide); silence(wide)
+                        }
+                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), gap) {
+                            sequencer(wide)
+                            Row(horizontalArrangement = gap) {
+                                session(Modifier.weight(1f)); midi(Modifier.weight(1f))
+                            }
+                        }
+                        Column(Modifier.width(340.dp).verticalScroll(rememberScrollState()), gap) {
+                            circle(wide)
+                        }
+                    }
+                }
+            }
+
+            if (showLog) {
+                Box(Modifier.fillMaxSize()) { LogOverlayHost(metronome) { showLog = false } }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LogOverlayHost(metronome: Metronome, onClose: () -> Unit) {
+    Box(Modifier.fillMaxSize(), propagateMinConstraints = true) { LogOverlay(metronome, onClose) }
+}
