@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -412,6 +413,7 @@ private fun Overlay(
             .fillMaxSize()
             .background(Palette.Inset.copy(alpha = 0.8f))
             .clickable(onClick = onClose)
+            .imePadding() // keeps the sheet above the on-screen keyboard
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -514,7 +516,7 @@ fun PatternOverlay(metronome: Metronome, onClose: () -> Unit) {
     var name by remember { mutableStateOf("") }
 
     Overlay("Patterns", onClose) {
-        Label("Saves the grid and its time signature. Tempo stays as it is.", color = Palette.Muted)
+        Text("Saves the grid and its time signature. Tempo stays as it is.", color = Palette.Muted, fontSize = 13.sp)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             BasicTextField(
                 value = name,
