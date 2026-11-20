@@ -11,12 +11,17 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import glick.core.FileActivityLogStore
+import glick.core.FilePatternStore
 import glick.core.Metronome
 import glick.ui.App
 
 fun main() = application {
     val metronome = remember {
-        Metronome(nowEpochMillis = System::currentTimeMillis, logStore = FileActivityLogStore(dataDirectory()))
+        Metronome(
+            nowEpochMillis = System::currentTimeMillis,
+            logStore = FileActivityLogStore(dataDirectory()),
+            patternStore = FilePatternStore(dataDirectory()),
+        )
     }
     val audio = remember { DesktopAudio(metronome, dataDirectory()) }
     Window(

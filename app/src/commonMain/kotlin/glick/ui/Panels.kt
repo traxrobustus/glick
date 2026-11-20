@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -39,6 +40,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
@@ -164,7 +167,6 @@ fun SignaturePanel(state: MetronomeState, update: Update, modifier: Modifier = M
                 { v -> update { it.copy(signature = it.signature.copy(denominator = v)) } },
             )
         }
-        Label(state.accentBeat?.let { "Accent on beat ${it + 1}" } ?: "No accent", color = Palette.Muted)
     }
 }
 
@@ -503,6 +505,72 @@ private fun DeviceRow(name: String, chosen: Boolean, working: Boolean, onClick: 
         Box(Modifier.size(10.dp).clip(androidx.compose.foundation.shape.CircleShape).background(if (chosen) mark else Palette.Off))
         Label(name, Modifier.weight(1f))
         if (chosen) Label(if (working) "in use" else "failed", color = mark)
+    }
+}
+
+@Composable
+fun PatternOverlay(metronome: Metronome, onClose: () -> Unit) {
+    val patterns by metronome.patterns.collectAsStateCompat()
+    var name by remember { mutableStateOf("") }
+
+    Overlay("Patterns", onClose) {
+        Label("Saves the grid and its time signature. Tempo stays as it is.", color = Palette.Muted)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BasicTextField(
+                value = name,
+                onValueChange = { name = it.take(40) },
+                singleLine = true,
+                textStyle = TextStyle(color = Palette.Text, fontSize = 14.sp),
+                cursorBrush = SolidColor(Palette.Beat),
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Palette.Inset)
+                    .border(1.dp, Palette.Outline, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                decorationBox = { field ->
+                    if (name.isEmpty()) Text("Name for the current pattern", color = Palette.Muted, fontSize = 14.sp)
+                    field()
+                },
+            )
+            TextButton(
+                if (patterns.any { it.name == name.trim() }) "Overwrite" else "Save",
+                onClick = {
+                    metronome.savePattern(name)
+                    name = ""
+                },
+                selected = name.isNotBlank(),
+            )
+        }
+
+        if (patterns.isEmpty()) Label("No saved pattern yet.", color = Palette.Muted)
+        Column(
+            Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            for (pattern in patterns) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Palette.Inset)
+                        .clickable {
+                            metronome.loadPattern(pattern.name)
+                            onClose()
+                        }
+                        .padding(start = 10.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(pattern.signature.toString(), color = Palette.Beat, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+                    Label(pattern.name, Modifier.weight(1f))
+                    val lanes = pattern.subdivisions.filter { it.enabled }.map { "÷${it.division}" } +
+                        pattern.polyVoices.filter { it.enabled }.map { "${it.pulses}:${pattern.signature.numerator}" }
+                    Label(lanes.joinToString("  "), color = Palette.Muted)
+                    TextButton("Delete", onClick = { metronome.deletePattern(pattern.name) })
+                }
+            }
+        }
     }
 }
 

@@ -11,14 +11,17 @@ import kotlin.math.roundToInt
  * the clock and every click lands on its exact sample.
  */
 class ClickEngine(private val metronome: Metronome, val sampleRate: Int) {
-    private val sounds: Array<FloatArray> = Array(Voices.COUNT) { voice ->
-        when {
-            voice == Voices.ACCENT -> ClickVoice(ClickPitches.ACCENT)
-            voice == Voices.BEAT -> ClickVoice(ClickPitches.BEAT)
-            voice == Voices.CHIME -> ClickVoice(ClickPitches.CHIME, decay = 0.03)
-            voice >= Voices.POLY -> ClickVoice(ClickPitches.POLY[voice - Voices.POLY])
-            else -> ClickVoice(ClickPitches.SUBDIVISIONS[voice - Voices.SUB])
-        }.render(sampleRate)
+    // Two sounds per voice: the plain one, then its accent (same voice, higher pitch).
+    private val sounds: Array<FloatArray> = Array(Voices.COUNT * 2) { index ->
+        val voice = index / 2
+        val accent = index % 2 == 1
+        val pitch = when {
+            voice == Voices.BEAT -> ClickPitches.BEAT
+            voice == Voices.CHIME -> ClickPitches.CHIME
+            voice >= Voices.POLY -> ClickPitches.POLY[voice - Voices.POLY]
+            else -> ClickPitches.SUBDIVISIONS[voice - Voices.SUB]
+        } * if (accent) ClickPitches.ACCENT_RATIO else 1.0
+        ClickVoice(pitch, decay = if (voice == Voices.CHIME) 0.03 else ClickVoice(pitch).decay).render(sampleRate)
     }
 
     // Fixed pool of playing clicks, so the audio thread never allocates.
@@ -34,8 +37,8 @@ class ClickEngine(private val metronome: Metronome, val sampleRate: Int) {
     @Volatile
     private var testRequested = false
 
-    private val sink = ClickSink { offsetNanos, voice, level ->
-        start(voice, (offsetNanos * sampleRate / 1e9).roundToInt(), level)
+    private val sink = ClickSink { offsetNanos, voice, level, accent ->
+        start(voice * 2 + if (accent) 1 else 0, (offsetNanos * sampleRate / 1e9).roundToInt(), level)
     }
 
     /** Plays one beat click regardless of the transport, to check the output. */
@@ -48,7 +51,7 @@ class ClickEngine(private val metronome: Metronome, val sampleRate: Int) {
         out.fill(0f, 0, frames)
         if (testRequested) {
             testRequested = false
-            start(Voices.BEAT, 0, 1f)
+            start(Voices.BEAT * 2, 0, 1f)
         }
         metronome.advance(frames * 1e9 / sampleRate, sink)
 
@@ -73,9 +76,9 @@ class ClickEngine(private val metronome: Metronome, val sampleRate: Int) {
         for (i in 0 until frames) out[i] = (out[i] * master).coerceIn(-1f, 1f)
     }
 
-    private fun start(voice: Int, offsetFrames: Int, level: Float) {
+    private fun start(sound: Int, offsetFrames: Int, level: Float) {
         if (playing == MAX_PLAYING) return
-        playingSound[playing] = voice
+        playingSound[playing] = sound
         playingPosition[playing] = -offsetFrames
         playingGain[playing] = level * HEADROOM
         playing++

@@ -51,6 +51,7 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
     val playing by remember { derivedStateOf { transport.value.playing } }
     var showLog by remember { mutableStateOf(false) }
     var showAudio by remember { mutableStateOf(false) }
+    var showPatterns by remember { mutableStateOf(false) }
     val audioStatus = audio?.status?.collectAsState()?.value
     val audioRunning = audioStatus?.running == true
 
@@ -109,7 +110,11 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
                 val signature = @Composable { m: Modifier -> SignaturePanel(state, metronome::update, m.then(dim)) }
                 val silence = @Composable { m: Modifier -> SilencePanel(state, metronome::update, m.then(dim)) }
                 val sequencer = @Composable { m: Modifier ->
-                    Panel("Pattern · one bar", m.then(dim)) {
+                    Panel(
+                        "Pattern · tap a step: normal, accent, mute",
+                        m.then(dim),
+                        trailing = { TextButton("Patterns", onClick = { showPatterns = true }) },
+                    ) {
                         Sequencer(state, state.sleepMode, { transport.value }, metronome::update, compact)
                     }
                 }
@@ -156,6 +161,7 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
             }
 
             if (showLog) LogOverlay(metronome) { showLog = false }
+            if (showPatterns) PatternOverlay(metronome) { showPatterns = false }
             if (showAudio && audio != null) AudioOverlay(audio) { showAudio = false }
         }
     }

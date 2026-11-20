@@ -19,18 +19,34 @@ data class TimeSignature(val numerator: Int = 4, val denominator: Int = 4) {
     override fun toString() = "$numerator/$denominator"
 }
 
-/** One subdivision lane: [division] evenly spaced clicks inside every beat. */
+/** How one step of a lane sounds. Tapping a step cycles through these. */
+enum class StepState {
+    Normal, Accent, Mute;
+
+    fun next(): StepState = entries[(ordinal + 1) % entries.size]
+}
+
+/** Pads with [StepState.Normal] or truncates, so a lane always has one state per step. */
+internal fun List<StepState>.fitted(size: Int): List<StepState> =
+    if (this.size == size) this else List(size) { getOrElse(it) { StepState.Normal } }
+
+/**
+ * One subdivision lane: [division] evenly spaced clicks inside every beat.
+ * [steps] holds one state per click of the whole bar, beat after beat.
+ */
 data class SubdivisionLine(
     val enabled: Boolean = false,
     val division: Int = 2,
     val level: Float = 0.6f,
+    val steps: List<StepState> = emptyList(),
 )
 
-/** One polyrhythm voice: [pulses] evenly spaced clicks across the whole bar. */
+/** One polyrhythm voice: [pulses] evenly spaced clicks across the whole bar, one of [steps] each. */
 data class PolyVoice(
     val enabled: Boolean = false,
     val pulses: Int = 3,
     val level: Float = 0.7f,
+    val steps: List<StepState> = emptyList(),
 )
 
 data class RandomSilence(val enabled: Boolean = false, val probability: Float = 0.25f)
@@ -65,8 +81,8 @@ data class MidiSync(val enabled: Boolean = false, val deviceId: String? = null)
 data class MetronomeState(
     val bpm: Double = 120.0,
     val signature: TimeSignature = TimeSignature(),
-    /** Zero-based beat that gets the higher-pitched click, or null for none. */
-    val accentBeat: Int? = 0,
+    /** One state per beat of the bar: normal click, accent (higher pitch) or mute. */
+    val beatSteps: List<StepState> = listOf(StepState.Accent),
     val beatLevel: Float = 1f,
     val subdivisions: List<SubdivisionLine> = listOf(
         SubdivisionLine(division = 2),
@@ -95,20 +111,24 @@ data class MetronomeState(
                 numerator,
                 if (signature.denominator in DENOMINATORS) signature.denominator else 4,
             ),
-            accentBeat = accentBeat?.coerceIn(0, numerator - 1),
+            beatSteps = beatSteps.fitted(numerator),
             beatLevel = beatLevel.coerceIn(0f, 1f),
             subdivisions = List(SUBDIVISION_LINES) { i ->
                 val line = subdivisions.getOrElse(i) { SubdivisionLine() }
+                val division = line.division.coerceIn(1, MAX_DIVISION)
                 line.copy(
-                    division = line.division.coerceIn(1, MAX_DIVISION),
+                    division = division,
                     level = line.level.coerceIn(0f, 1f),
+                    steps = line.steps.fitted(numerator * division),
                 )
             },
             polyVoices = List(POLY_VOICES) { i ->
                 val voice = polyVoices.getOrElse(i) { PolyVoice() }
+                val pulses = voice.pulses.coerceIn(1, MAX_POLY_PULSES)
                 voice.copy(
-                    pulses = voice.pulses.coerceIn(1, MAX_POLY_PULSES),
+                    pulses = pulses,
                     level = voice.level.coerceIn(0f, 1f),
+                    steps = voice.steps.fitted(pulses),
                 )
             },
             silence = silence.copy(probability = silence.probability.coerceIn(0f, 1f)),
@@ -125,7 +145,7 @@ data class MetronomeState(
         if (!sleepMode) this
         else copy(
             bpm = SLEEP_BPM,
-            accentBeat = null,
+            beatSteps = beatSteps.map { StepState.Normal },
             subdivisions = subdivisions.map { it.copy(enabled = false) },
             polyVoices = polyVoices.map { it.copy(enabled = false) },
             silence = silence.copy(enabled = false),
@@ -161,10 +181,22 @@ enum class ParamTarget(
         { it.signature.numerator.toDouble() },
         { s, v -> s.copy(signature = s.signature.copy(numerator = whole(v))) },
     ),
+    /** Moves the beat accent: every accent is cleared and one is set on the target beat. */
     AccentBeat(
         "Accent beat", "", 1.0,
-        { (it.accentBeat ?: 0) + 1.0 },
-        { s, v -> s.copy(accentBeat = whole(v) - 1) },
+        { it.beatSteps.indexOf(StepState.Accent).coerceAtLeast(0) + 1.0 },
+        { s, v ->
+            val target = (whole(v) - 1).coerceIn(0, s.beatSteps.lastIndex.coerceAtLeast(0))
+            s.copy(
+                beatSteps = s.beatSteps.mapIndexed { i, step ->
+                    when {
+                        i == target -> StepState.Accent
+                        step == StepState.Accent -> StepState.Normal
+                        else -> step
+                    }
+                },
+            )
+        },
     ),
     BeatLevel("Beat level", "%", -5.0, { pct(it.beatLevel) }, { s, v -> s.copy(beatLevel = unpct(v)) }),
     Sub1Division("Sub 1 division", "", 1.0, { it.subdivisions[0].division.toDouble() }, sub(0) { l, v -> l.copy(division = whole(v)) }),

@@ -72,6 +72,8 @@ data class ClickVoice(
 object ClickPitches {
     const val ACCENT = 1850.0
     const val BEAT = 1440.0
+    /** An accented step plays its own voice this much higher: the DB-33's accent-to-beat interval. */
+    const val ACCENT_RATIO = ACCENT / BEAT
     val SUBDIVISIONS = listOf(1050.0, 850.0, 700.0)
     val POLY = listOf(2330.0, 1650.0, 1240.0, 590.0)
     /** Circle-timer completion sound: higher and longer than any click. */

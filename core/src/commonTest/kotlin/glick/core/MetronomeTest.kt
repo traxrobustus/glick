@@ -134,9 +134,13 @@ class MetronomeTest {
 
     @Test
     fun stateIsClampedToLegalRanges() {
-        val s = MetronomeState(bpm = 99999.0, signature = TimeSignature(0, 5), accentBeat = 9).sanitized()
+        val s = MetronomeState(bpm = 99999.0, signature = TimeSignature(0, 5)).sanitized()
         assertEquals(MAX_BPM, s.bpm)
         assertEquals(TimeSignature(1, 4), s.signature)
-        assertEquals(0, s.accentBeat)
+        assertEquals(listOf(StepState.Accent), s.beatSteps)
+        val wide = MetronomeState(signature = TimeSignature(3, 4)).sanitized()
+        assertEquals(listOf(StepState.Accent, StepState.Normal, StepState.Normal), wide.beatSteps)
+        assertEquals(6, wide.subdivisions[0].steps.size)
+        assertEquals(3, wide.polyVoices[0].steps.size)
     }
 }

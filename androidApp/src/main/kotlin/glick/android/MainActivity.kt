@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import glick.core.FileActivityLogStore
+import glick.core.FilePatternStore
 import glick.core.Metronome
 import glick.ui.App
 
@@ -19,7 +20,11 @@ class GlickApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        metronome = Metronome(nowEpochMillis = System::currentTimeMillis, logStore = FileActivityLogStore(filesDir))
+        metronome = Metronome(
+            nowEpochMillis = System::currentTimeMillis,
+            logStore = FileActivityLogStore(filesDir),
+            patternStore = FilePatternStore(filesDir),
+        )
         audio = AndroidAudio(this, metronome)
     }
 }

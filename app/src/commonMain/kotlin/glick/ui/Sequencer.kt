@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import glick.core.MAX_DIVISION
 import glick.core.MAX_POLY_PULSES
 import glick.core.MetronomeState
+import glick.core.StepState
 import glick.core.Transport
 import kotlin.math.ceil
 
@@ -94,26 +95,19 @@ fun Sequencer(
                     Box(Modifier.size(12.dp).clip(CircleShape).background(Palette.Beat))
                 }
                 Label("Click", Modifier.width(44.dp))
-                Label("tap = accent", Modifier.width(94.dp), color = Palette.Muted)
+                Box(Modifier.width(94.dp))
                 LevelSlider(state.beatLevel, { v -> update { it.copy(beatLevel = v) } }, Modifier.weight(1f))
             },
         ) { gridModifier ->
-            val accent by rememberUpdatedState(if (sleep) null else state.accentBeat)
-            val count by rememberUpdatedState(beats)
             Canvas(
-                gridModifier.pointerInput(sleep) {
-                    if (sleep) return@pointerInput
-                    detectTapGestures { tap ->
-                        val index = (tap.x / size.width * count).toInt().coerceIn(0, count - 1)
-                        update { it.copy(accentBeat = if (it.accentBeat == index) null else index) }
-                    }
+                gridModifier.stepTaps(beats, !sleep) { index ->
+                    update { it.copy(beatSteps = it.beatSteps.cycled(index)) }
                 },
             ) {
-                val t = transport()
                 drawCells(
                     cells = beats, phase = barPhase(), enabled = true, level = state.beatLevel,
-                    color = { if (it == accent) Palette.Accent else Palette.Beat },
-                    hollow = t.beatSilenced, measurer = measurer, label = { null },
+                    color = Palette.Beat, step = { if (sleep) StepState.Normal else state.beatSteps[it] },
+                    hollow = transport().beatSilenced, measurer = measurer, label = { null },
                 )
             }
         }
@@ -132,10 +126,16 @@ fun Sequencer(
                     )
                 },
             ) { gridModifier ->
-                Canvas(gridModifier) {
+                val cells = beats * line.division
+                Canvas(
+                    gridModifier.stepTaps(cells, !sleep) { index ->
+                        update { s -> s.withSub(i) { it.copy(steps = it.steps.cycled(index)) } }
+                    },
+                ) {
                     drawCells(
-                        cells = beats * line.division, phase = barPhase(), enabled = on, level = line.level,
-                        color = { Palette.Sub }, hollow = transport().beatSilenced, measurer = measurer,
+                        cells = cells, phase = barPhase(), enabled = on, level = line.level,
+                        color = Palette.Sub, step = { line.steps[it] },
+                        hollow = transport().beatSilenced, measurer = measurer,
                         strong = { it % line.division == 0 },
                         label = { (it % line.division + 1).toString() },
                     )
@@ -157,10 +157,14 @@ fun Sequencer(
                     )
                 },
             ) { gridModifier ->
-                Canvas(gridModifier) {
+                Canvas(
+                    gridModifier.stepTaps(voice.pulses, !sleep) { index ->
+                        update { s -> s.withPoly(i) { it.copy(steps = it.steps.cycled(index)) } }
+                    },
+                ) {
                     drawCells(
                         cells = voice.pulses, phase = barPhase(), enabled = on, level = voice.level,
-                        color = { Palette.Poly }, hollow = false, measurer = measurer,
+                        color = Palette.Poly, step = { voice.steps[it] }, hollow = false, measurer = measurer,
                         label = { (it + 1).toString() },
                     )
                 }
@@ -168,6 +172,16 @@ fun Sequencer(
         }
     }
 }
+
+private fun List<StepState>.cycled(index: Int): List<StepState> =
+    mapIndexed { i, step -> if (i == index) step.next() else step }
+
+/** Reports which of [cells] equal-width steps was tapped. */
+private fun Modifier.stepTaps(cells: Int, enabled: Boolean, onTap: (Int) -> Unit): Modifier =
+    pointerInput(cells, enabled) {
+        if (!enabled) return@pointerInput
+        detectTapGestures { tap -> onTap((tap.x / size.width * cells).toInt().coerceIn(0, cells - 1)) }
+    }
 
 private fun MetronomeState.withSub(index: Int, f: (glick.core.SubdivisionLine) -> glick.core.SubdivisionLine) =
     copy(subdivisions = subdivisions.mapIndexed { i, l -> if (i == index) f(l) else l })
@@ -225,7 +239,8 @@ private fun DrawScope.drawCells(
     phase: Double,
     enabled: Boolean,
     level: Float,
-    color: (Int) -> Color,
+    color: Color,
+    step: (Int) -> StepState,
     hollow: Boolean,
     measurer: TextMeasurer,
     strong: (Int) -> Boolean = { true },
@@ -246,28 +261,43 @@ private fun DrawScope.drawCells(
     for (i in 0 until cells) {
         val topLeft = Offset(i * cell + gap / 2, 0f)
         val cellSize = Size((cell - gap).coerceAtLeast(1f), size.height)
-        val base = if (enabled) color(i) else Palette.Off
-        val rest = when {
-            !enabled -> 0.55f
-            strong(i) -> 0.16f + 0.26f * level
-            else -> 0.08f + 0.18f * level
+        val state = step(i)
+        val base = when {
+            !enabled -> Palette.Off
+            state == StepState.Accent -> Palette.Accent
+            else -> color
         }
-        drawRoundRect(base.copy(alpha = rest), topLeft, cellSize, corner)
-        if (i == active) {
-            if (hollow) {
-                drawRoundRect(base.copy(alpha = glow), topLeft, cellSize, corner, style = Stroke(1.5.dp.toPx()))
-            } else {
-                drawRoundRect(base.copy(alpha = 0.35f + 0.65f * glow), topLeft, cellSize, corner)
+        val lit = i == active && state != StepState.Mute && !hollow
+        if (state == StepState.Mute) {
+            // A muted step is an empty frame: the slot stays visible, nothing sounds.
+            val inset = Offset(topLeft.x + 0.75.dp.toPx(), 0.75.dp.toPx())
+            val frame = Size((cellSize.width - 1.5.dp.toPx()).coerceAtLeast(1f), cellSize.height - 1.5.dp.toPx())
+            drawRoundRect(Palette.Off.copy(alpha = if (i == active) 1f else 0.7f), inset, frame, corner, style = Stroke(1.5.dp.toPx()))
+        } else {
+            val rest = when {
+                !enabled && state == StepState.Accent -> 0.9f
+                !enabled -> 0.55f
+                state == StepState.Accent -> 0.30f + 0.30f * level
+                strong(i) -> 0.16f + 0.26f * level
+                else -> 0.08f + 0.18f * level
+            }
+            drawRoundRect(base.copy(alpha = rest), topLeft, cellSize, corner)
+            if (i == active) {
+                if (hollow) {
+                    drawRoundRect(base.copy(alpha = glow), topLeft, cellSize, corner, style = Stroke(1.5.dp.toPx()))
+                } else {
+                    drawRoundRect(base.copy(alpha = 0.35f + 0.65f * glow), topLeft, cellSize, corner)
+                }
             }
         }
         if (showLabels) {
             val text = label(i) ?: continue
-            val lit = i == active && !hollow
             centredText(
                 measurer, text, i * cell, cell,
                 when {
                     lit -> Palette.Inset
-                    enabled -> base.copy(alpha = if (strong(i)) 0.95f else 0.6f)
+                    state == StepState.Mute -> Palette.Muted.copy(alpha = 0.35f)
+                    enabled -> base.copy(alpha = if (strong(i) || state == StepState.Accent) 0.95f else 0.6f)
                     else -> Palette.Muted.copy(alpha = 0.5f)
                 },
             )

@@ -10,10 +10,9 @@ import kotlin.random.Random
 
 /** Identifies which click voice an event is for. */
 object Voices {
-    const val ACCENT = 0
-    const val BEAT = 1
+    const val BEAT = 0
     /** Subdivision line n is `SUB + n`. */
-    const val SUB = 2
+    const val SUB = 1
     /** Polyrhythm voice n is `POLY + n`. */
     const val POLY = SUB + SUBDIVISION_LINES
     const val CHIME = POLY + POLY_VOICES
@@ -23,7 +22,7 @@ object Voices {
 /** Receives every click as the transport passes it. */
 fun interface ClickSink {
     /** [offsetNanos] is measured from the start of the current [Metronome.advance] call. */
-    fun click(offsetNanos: Double, voice: Int, level: Float)
+    fun click(offsetNanos: Double, voice: Int, level: Float, accent: Boolean)
 }
 
 /** Where the click is right now. Published after every [Metronome.advance]. */
@@ -55,6 +54,7 @@ class Metronome(
     private val nowEpochMillis: () -> Long,
     private val random: Random = Random.Default,
     private val logStore: ActivityLogStore = InMemoryActivityLogStore(),
+    private val patternStore: PatternStore = InMemoryPatternStore(),
 ) {
     private val _state = MutableStateFlow(initial.sanitized())
     val state: StateFlow<MetronomeState> = _state.asStateFlow()
@@ -64,6 +64,9 @@ class Metronome(
 
     private val _log = MutableStateFlow(logStore.load())
     val log: StateFlow<List<LogEntry>> = _log.asStateFlow()
+
+    private val _patterns = MutableStateFlow(patternStore.load())
+    val patterns: StateFlow<List<Pattern>> = _patterns.asStateFlow()
 
     private var circleElapsedNanos = 0.0
     private var circleBars = 0
@@ -92,6 +95,24 @@ class Metronome(
 
     fun addCircleAction() = update {
         it.copy(circle = it.circle.copy(actions = it.circle.actions + CircleAction(id = nextActionId++)))
+    }
+
+    /** Saves the current pattern under [name], replacing any pattern of that name. */
+    fun savePattern(name: String): Unit = synchronized(lock) {
+        val pattern = Pattern.of(name, _state.value)
+        if (pattern.name.isEmpty()) return
+        _patterns.value = _patterns.value.filter { it.name != pattern.name } + pattern
+        patternStore.save(_patterns.value)
+    }
+
+    fun loadPattern(name: String): Unit = synchronized(lock) {
+        val pattern = _patterns.value.firstOrNull { it.name == name } ?: return
+        updateLocked(pattern::applyTo)
+    }
+
+    fun deletePattern(name: String): Unit = synchronized(lock) {
+        _patterns.value = _patterns.value.filter { it.name != name }
+        patternStore.save(_patterns.value)
     }
 
     fun play(): Unit = synchronized(lock) { playLocked() }
@@ -224,7 +245,7 @@ class Metronome(
             }
             if (circleDone) {
                 completions++
-                if (s.circle.sound) sink?.click(elapsed, Voices.CHIME, 1f)
+                if (s.circle.sound) sink?.click(elapsed, Voices.CHIME, 1f, false)
                 runCircleActions()
             }
             if (reachesBeat) {
@@ -262,8 +283,9 @@ class Metronome(
         sink: ClickSink,
     ) {
         if (!silenced) {
-            if (from == 0.0 && s.beatLevel > 0f) {
-                sink.click(baseNanos, if (beat == s.accentBeat) Voices.ACCENT else Voices.BEAT, s.beatLevel)
+            val beatStep = s.beatSteps[beat]
+            if (from == 0.0 && s.beatLevel > 0f && beatStep != StepState.Mute) {
+                sink.click(baseNanos, Voices.BEAT, s.beatLevel, beatStep == StepState.Accent)
             }
             s.subdivisions.forEachIndexed { index, line ->
                 if (!line.enabled || line.level <= 0f) return@forEachIndexed
@@ -271,7 +293,13 @@ class Metronome(
                 var k = ceil(from * division).toInt()
                 while (k < line.division && k / division < to) {
                     val at = k / division
-                    if (at >= from) sink.click(baseNanos + (at - from) * beatNanos, Voices.SUB + index, line.level)
+                    val step = line.steps[beat * line.division + k]
+                    if (at >= from && step != StepState.Mute) {
+                        sink.click(
+                            baseNanos + (at - from) * beatNanos, Voices.SUB + index, line.level,
+                            step == StepState.Accent,
+                        )
+                    }
                     k++
                 }
             }
@@ -285,9 +313,10 @@ class Metronome(
             var j = ceil(barFrom * pulses).toInt()
             while (j < voice.pulses && j / pulses < barTo) {
                 val at = j / pulses
-                if (at >= barFrom) {
+                val step = voice.steps[j]
+                if (at >= barFrom && step != StepState.Mute) {
                     val offset = ((at - barFrom) * beats * beatNanos).coerceAtLeast(0.0)
-                    sink.click(baseNanos + offset, Voices.POLY + index, voice.level)
+                    sink.click(baseNanos + offset, Voices.POLY + index, voice.level, step == StepState.Accent)
                 }
                 j++
             }
