@@ -402,7 +402,7 @@ fun MidiPanel(state: MetronomeState, update: Update, midiPorts: () -> List<MidiP
 
 /** A centred sheet over a dimmed app; clicking outside it closes it. */
 @Composable
-private fun Overlay(
+internal fun Overlay(
     title: String,
     onClose: () -> Unit,
     actions: @Composable () -> Unit = {},

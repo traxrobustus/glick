@@ -71,7 +71,7 @@ class ClickEngineTest {
         val audio = FloatArray(rate * 3)
         var written = 0
         while (written + block.size <= audio.size) {
-            engine.render(block, block.size)
+            engine.render(block, FloatArray(block.size), block.size)
             block.copyInto(audio, written)
             written += block.size
         }
@@ -93,7 +93,7 @@ class ClickEngineTest {
         val engine = ClickEngine(metronome(MetronomeState(silence = RandomSilence(true, 1f))).also { it.play() }, 48_000)
         val block = FloatArray(4800)
         repeat(20) {
-            engine.render(block, block.size)
+            engine.render(block, FloatArray(block.size), block.size)
             assertTrue(block.all { it == 0f })
         }
     }

@@ -67,9 +67,9 @@ class AndroidAudio(context: Context, private val metronome: Metronome) : AudioOu
             val format = AudioFormat.Builder()
                 .setSampleRate(rate)
                 .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                 .build()
-            val minBytes = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
+            val minBytes = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_FLOAT)
             check(minBytes > 0) { "This phone does not offer a float audio output." }
             val track = AudioTrack.Builder()
                 .setAudioAttributes(
@@ -108,12 +108,18 @@ class AndroidAudio(context: Context, private val metronome: Metronome) : AudioOu
 
         override fun run() {
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-            val block = FloatArray(BLOCK_FRAMES)
+            val left = FloatArray(BLOCK_FRAMES)
+            val right = FloatArray(BLOCK_FRAMES)
+            val block = FloatArray(BLOCK_FRAMES * 2)
             try {
                 track.play()
                 while (alive) {
-                    engine.render(block, BLOCK_FRAMES)
-                    val written = track.write(block, 0, BLOCK_FRAMES, AudioTrack.WRITE_BLOCKING)
+                    engine.render(left, right, BLOCK_FRAMES)
+                    for (i in 0 until BLOCK_FRAMES) {
+                        block[2 * i] = left[i]
+                        block[2 * i + 1] = right[i]
+                    }
+                    val written = track.write(block, 0, block.size, AudioTrack.WRITE_BLOCKING)
                     check(written >= 0) { "Playback stopped (error $written)." }
                 }
             } catch (e: Exception) {

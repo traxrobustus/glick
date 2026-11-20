@@ -129,7 +129,8 @@ class DesktopAudio(private val metronome: Metronome, directory: File) : AudioOut
 
         override fun run() {
             val channels = line.format.channels
-            val mono = FloatArray(BLOCK_FRAMES)
+            val left = FloatArray(BLOCK_FRAMES)
+            val right = FloatArray(BLOCK_FRAMES)
             val bytes = ByteArray(BLOCK_FRAMES * channels * 2)
             try {
                 line.start()
@@ -145,13 +146,20 @@ class DesktopAudio(private val metronome: Metronome, directory: File) : AudioOut
                         status.value = now.copy(dropouts = now.dropouts + 1)
                         System.err.println("glick: audio dropout #${now.dropouts + 1}")
                     }
-                    engine.render(mono, BLOCK_FRAMES)
+                    engine.render(left, right, BLOCK_FRAMES)
                     var at = 0
-                    for (sample in mono) {
-                        val value = (sample * Short.MAX_VALUE).toInt()
-                        repeat(channels) {
+                    for (i in 0 until BLOCK_FRAMES) {
+                        if (channels == 1) {
+                            val value = ((left[i] + right[i]) * 0.5f * Short.MAX_VALUE).toInt()
                             bytes[at++] = value.toByte()
                             bytes[at++] = (value shr 8).toByte()
+                        } else {
+                            val l = (left[i] * Short.MAX_VALUE).toInt()
+                            val r = (right[i] * Short.MAX_VALUE).toInt()
+                            bytes[at++] = l.toByte()
+                            bytes[at++] = (l shr 8).toByte()
+                            bytes[at++] = r.toByte()
+                            bytes[at++] = (r shr 8).toByte()
                         }
                     }
                     line.write(bytes, 0, bytes.size)

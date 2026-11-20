@@ -36,6 +36,8 @@ import glick.core.AudioOutput
 import glick.core.Metronome
 import glick.core.MidiPort
 import glick.core.SLEEP_BPM
+import glick.core.SongRef
+import glick.core.song.SongSession
 import kotlinx.coroutines.flow.StateFlow
 
 /** Local date and time of a log entry, e.g. "2026-11-20 14:03". */
@@ -45,15 +47,31 @@ expect fun formatDateTime(epochMillis: Long): String
 internal fun <T> StateFlow<T>.collectAsStateCompat(): State<T> = collectAsState()
 
 @Composable
-fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutput? = null) {
+fun App(
+    metronome: Metronome,
+    midiPorts: () -> List<MidiPort>,
+    audio: AudioOutput? = null,
+    song: SongSession? = null,
+    pickSong: (suspend () -> SongRef?)? = null,
+) {
     val state by metronome.state.collectAsState()
     val transport = metronome.transport.collectAsState()
     val playing by remember { derivedStateOf { transport.value.playing } }
     var showLog by remember { mutableStateOf(false) }
     var showAudio by remember { mutableStateOf(false) }
     var showPatterns by remember { mutableStateOf(false) }
+    var showSong by remember { mutableStateOf(false) }
+    // A song opened for the first time, waiting for the user to say whether its tempo is known.
+    var tempoQuestion by remember { mutableStateOf<SongRef?>(null) }
     val audioStatus = audio?.status?.collectAsState()?.value
     val audioRunning = audioStatus?.running == true
+
+    // A song is prepared for one sample rate; when the device's rate changes it is prepared again.
+    val sampleRate = audioStatus?.sampleRate?.takeIf { it > 0 } ?: 48_000
+    LaunchedEffect(song, sampleRate) {
+        val loaded = song?.view?.value?.ref ?: return@LaunchedEffect
+        if (song.preparedSampleRate != 0 && song.preparedSampleRate != sampleRate) song.load(loaded, sampleRate)
+    }
 
     // The audio thread owns the clock. Without sound, display frames keep the
     // transport (and so the timers and the playhead) moving.
@@ -83,9 +101,13 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
             Column(Modifier.fillMaxSize().safeDrawingPadding().padding(14.dp), gap) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("glick", color = Palette.Beat, fontSize = 22.sp, fontWeight = FontWeight.Black)
+                    // A phone has no room for the tempo next to the buttons; there the tab row shows it.
                     Label(
-                        if (state.sleepMode) "Sleep mode · steady ${SLEEP_BPM.toInt()} BPM click"
-                        else "${formatNumber(state.bpm, 1)} BPM · ${state.signature}",
+                        when {
+                            compact -> ""
+                            state.sleepMode -> "Sleep mode · steady ${SLEEP_BPM.toInt()} BPM click"
+                            else -> "${formatNumber(state.bpm, 1)} BPM · ${state.signature}"
+                        },
                         Modifier.weight(1f),
                         Palette.Muted,
                     )
@@ -95,6 +117,9 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
                         selected = state.sleepMode,
                         color = Palette.Poly,
                     )
+                    if (song != null && !compact) {
+                        TextButton("Song", onClick = { showSong = !showSong }, selected = showSong)
+                    }
                     if (audio != null) {
                         TextButton(
                             if (audioRunning) "Audio" else "Audio: no sound",
@@ -124,13 +149,24 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
                 val circle = @Composable { m: Modifier -> CirclePanel(state, transport, metronome, m.then(dim)) }
                 val session = @Composable { m: Modifier -> SessionPanel(state, transport, metronome, m) }
                 val midi = @Composable { m: Modifier -> MidiPanel(state, metronome::update, midiPorts, m.then(dim)) }
+                val songView = @Composable { m: Modifier ->
+                    if (song != null && pickSong != null) {
+                        SongPanel(
+                            song, metronome, state, { transport.value }, pickSong,
+                            onOpen = { ref -> if (song.hasMap(ref)) song.load(ref, sampleRate) else tempoQuestion = ref },
+                            outputDelayMillis = if (audioRunning) audioStatus?.latencyMillis ?: 0 else 0,
+                            compact, m.then(dim),
+                        )
+                    }
+                }
                 val wide = Modifier.fillMaxWidth()
 
                 if (compact) {
                     // On a phone each desktop column becomes a tab.
                     var tab by remember { mutableStateOf(0) }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("Tempo", "Pattern", "Timers").forEachIndexed { index, name ->
+                        val tabs = listOf("Tempo", "Pattern", "Timers") + if (song != null) listOf("Song") else emptyList()
+                        tabs.forEachIndexed { index, name ->
                             TextButton(name, { tab = index }, Modifier.weight(1f), selected = tab == index)
                         }
                         TextButton(
@@ -141,11 +177,17 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
                             color = if (playing) Palette.Accent else Palette.Beat,
                         )
                     }
+                    Label(
+                        if (state.sleepMode) "Sleep mode · steady ${SLEEP_BPM.toInt()} BPM click"
+                        else "${formatNumber(state.bpm, 1)} BPM · ${state.signature}",
+                        color = Palette.Muted,
+                    )
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), gap) {
                         when (tab) {
                             0 -> { tempo(wide); signature(wide); silence(wide) }
                             1 -> sequencer(wide)
-                            else -> { circle(wide); session(wide); midi(wide) }
+                            2 -> { circle(wide); session(wide); midi(wide) }
+                            else -> songView(wide)
                         }
                     }
                 } else {
@@ -153,11 +195,18 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
                         Column(Modifier.width(270.dp).verticalScroll(rememberScrollState()), gap) {
                             tempo(wide); signature(wide); silence(wide)
                         }
-                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), gap) {
-                            sequencer(wide)
-                        }
-                        Column(Modifier.width(320.dp).verticalScroll(rememberScrollState()), gap) {
-                            circle(wide); session(wide); midi(wide)
+                        if (showSong) {
+                            // The song view takes the place of the pattern and timer columns.
+                            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), gap) {
+                                songView(wide)
+                            }
+                        } else {
+                            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), gap) {
+                                sequencer(wide)
+                            }
+                            Column(Modifier.width(320.dp).verticalScroll(rememberScrollState()), gap) {
+                                circle(wide); session(wide); midi(wide)
+                            }
                         }
                     }
                 }
@@ -166,6 +215,17 @@ fun App(metronome: Metronome, midiPorts: () -> List<MidiPort>, audio: AudioOutpu
             if (showLog) LogOverlay(metronome) { showLog = false }
             if (showPatterns) PatternOverlay(metronome) { showPatterns = false }
             if (showAudio && audio != null) AudioOverlay(audio) { showAudio = false }
+            tempoQuestion?.let { ref ->
+                SongTempoOverlay(
+                    ref,
+                    initialSignature = state.signature,
+                    onLoad = { setup ->
+                        tempoQuestion = null
+                        song?.load(ref, sampleRate, setup)
+                    },
+                    onCancel = { tempoQuestion = null },
+                )
+            }
         }
     }
 }

@@ -5,6 +5,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
+import glick.core.song.AudioSource
+import glick.core.song.SongTimeline
+import kotlin.concurrent.Volatile
 import kotlin.math.ceil
 import kotlin.random.Random
 
@@ -40,6 +43,10 @@ data class Transport(
     val circleCompletions: Int = 0,
     val sessionElapsedSeconds: Double = 0.0,
     val sessionFinished: Boolean = false,
+    /** Where the loaded song is, in seconds from the start of its file; negative when no song is playing. */
+    val songSeconds: Double = -1.0,
+    /** Changes whenever the song position jumps (start, loop wrap, edit) rather than flows. */
+    val songJumps: Int = 0,
 )
 
 /**
@@ -55,11 +62,14 @@ class Metronome(
     private val random: Random = Random.Default,
     private val logStore: ActivityLogStore = InMemoryActivityLogStore(),
     private val patternStore: PatternStore = InMemoryPatternStore(),
+    timers: TimerProgress = TimerProgress(),
 ) {
     private val _state = MutableStateFlow(initial.sanitized())
     val state: StateFlow<MetronomeState> = _state.asStateFlow()
 
-    private val _transport = MutableStateFlow(Transport())
+    private val _transport = MutableStateFlow(
+        Transport(circleCompletions = timers.circleCompletions, sessionFinished = timers.sessionFinished),
+    )
     val transport: StateFlow<Transport> = _transport.asStateFlow()
 
     private val _log = MutableStateFlow(logStore.load())
@@ -68,13 +78,91 @@ class Metronome(
     private val _patterns = MutableStateFlow(patternStore.load())
     val patterns: StateFlow<List<Pattern>> = _patterns.asStateFlow()
 
-    private var circleElapsedNanos = 0.0
-    private var circleBars = 0
-    private var sessionElapsedNanos = 0.0
+    private var circleElapsedNanos = timers.circleElapsedSeconds * 1e9
+    private var circleBars = timers.circleBars
+    private var sessionElapsedNanos = timers.sessionElapsedSeconds * 1e9
     private var runStartMillis = 0L
     private var runStartBpm = 0.0
-    private var nextActionId = 1L
+    private var nextActionId = (initial.circle.actions.maxOfOrNull { it.id } ?: 0L) + 1
     private val lock = SynchronizedObject()
+
+    // The loaded song, and where the transport is in it. The song is slaved to
+    // the beat position, never to the clock, so any tempo change keeps it in sync.
+    private var song: SongTimeline? = null
+    private var songBar = 0
+    private var songBeat = 0
+    private var songJumps = 0
+
+    /** In "click follows song" mode: how much faster than the song's own tempo the click runs. */
+    private var songSpeed = 1.0
+
+    /** While true no click sounds; the transport runs on. Used while a song's tempo is being tapped. */
+    @Volatile
+    var clickMuted: Boolean = false
+
+    /** The decoded audio of the loaded song, for whoever renders sound. */
+    @Volatile
+    var songAudio: AudioSource? = null
+
+    init {
+        publishTimers()
+    }
+
+    /** The timers' progress, to be saved with the settings. */
+    fun timerProgress(): TimerProgress = synchronized(lock) {
+        val t = _transport.value
+        TimerProgress(
+            sessionElapsedSeconds = sessionElapsedNanos / 1e9,
+            sessionFinished = t.sessionFinished,
+            circleElapsedSeconds = circleElapsedNanos / 1e9,
+            circleBars = circleBars,
+            circleCompletions = t.circleCompletions,
+        )
+    }
+
+    /**
+     * Loads, replaces or (with null) removes the song map. Called again after
+     * every edit of the grid; a playing song then stays in the bar it was in.
+     */
+    fun setSong(timeline: SongTimeline?, resetSpeed: Boolean = false): Unit = synchronized(lock) {
+        song = timeline?.takeIf { it.playable }
+        if (resetSpeed) songSpeed = 1.0
+        val active = activeSong() ?: return
+        val t = _transport.value
+        songBar = if (t.playing) songBar.coerceIn(active.loopStartBar, active.loopEndBar - 1) else active.loopStartBar
+        val beatInBar = if (t.playing) t.beat.coerceAtMost(active.signatureOfBar(songBar).numerator - 1) else 0
+        songBeat = active.barStartBeat(songBar) + beatInBar
+        songJumps++
+        applySong(active)
+        _transport.value = _transport.value.copy(beat = beatInBar)
+        publishTimers()
+    }
+
+    private fun activeSong(): SongTimeline? = song.takeIf { !_state.value.sleepMode }
+
+    /** Makes the click's signature, and in follow mode its tempo, those of the current song beat. */
+    private fun applySong(active: SongTimeline) {
+        val old = _state.value
+        var s = old
+        val signature = active.signatureOfBar(songBar)
+        if (s.signature != signature) s = s.copy(signature = signature)
+        if (s.songMode == SongMode.ClickFollowsSong) {
+            val bpm = (active.bpmOfBeat(songBeat) * songSpeed).coerceIn(MIN_BPM, MAX_BPM)
+            if (s.bpm != bpm) s = s.copy(bpm = bpm)
+        }
+        if (s !== old) _state.value = s.sanitized()
+    }
+
+    /**
+     * In follow mode the tempo belongs to the song, so a tempo change from the
+     * jog wheel or a circle action is kept as a speed factor on top of it.
+     */
+    private fun noteTempoChange(before: Double) {
+        val active = activeSong() ?: return
+        val s = _state.value
+        if (s.songMode != SongMode.ClickFollowsSong || s.bpm == before) return
+        songSpeed = (s.bpm / active.bpmOfBeat(songBeat)).coerceIn(0.05, 20.0)
+    }
 
     // Disk writes are queued under [lock] and run after it is released, so the
     // audio thread never waits for the file system.
@@ -92,9 +180,20 @@ class Metronome(
 
     private fun updateLocked(transform: (MetronomeState) -> MetronomeState) {
         val old = _state.value
-        val new = transform(old).sanitized()
+        var new = transform(old).sanitized()
+        val active = song.takeIf { !new.sleepMode }
+        if (active != null) {
+            // Bars come from the song; switching to follow mode starts at the song's own tempo.
+            new = new.copy(signature = active.signatureOfBar(songBar)).sanitized()
+            if (new.songMode == SongMode.ClickFollowsSong && old.songMode != SongMode.ClickFollowsSong) {
+                songSpeed = 1.0
+                new = new.copy(bpm = active.bpmOfBeat(songBeat).coerceIn(MIN_BPM, MAX_BPM))
+            }
+        }
         if (new == old) return
         _state.value = new
+        noteTempoChange(old.bpm)
+        if (active != null && old.sleepMode) setSongPositionToLoopStart(active)
         if (new.session.enabled && !old.session.enabled) resetSessionLocked()
         if (new.circle.enabled != old.circle.enabled || new.circle.mode != old.circle.mode) resetCircleLocked()
         val numerator = new.effective().signature.numerator
@@ -102,6 +201,13 @@ class Metronome(
         // A shorter bar wraps the beat counter but keeps the phase, so the pulse never jumps.
         if (t.beat >= numerator) _transport.value = t.copy(beat = t.beat % numerator)
         publishTimers()
+    }
+
+    private fun setSongPositionToLoopStart(active: SongTimeline) {
+        songBar = active.loopStartBar
+        songBeat = active.barStartBeat(songBar)
+        songJumps++
+        applySong(active)
     }
 
     fun addCircleAction() = update {
@@ -140,6 +246,7 @@ class Metronome(
         val t = _transport.value
         if (t.playing) return
         if (t.sessionFinished) sessionElapsedNanos = 0.0
+        activeSong()?.let(::setSongPositionToLoopStart)
         runStartMillis = nowEpochMillis()
         runStartBpm = _state.value.effective().bpm
         _transport.value = t.copy(
@@ -162,7 +269,8 @@ class Metronome(
     private fun stopLocked() {
         val t = _transport.value
         if (!t.playing) return
-        _transport.value = t.copy(playing = false, beat = 0, beatPhase = 0.0, beatSilenced = false)
+        // No song position while stopped: the song falls silent with the click.
+        _transport.value = t.copy(playing = false, beat = 0, beatPhase = 0.0, beatSilenced = false, songSeconds = -1.0)
         val s = _state.value
         val entry = LogEntry(
             startEpochMillis = runStartMillis,
@@ -218,7 +326,8 @@ class Metronome(
     }
 
     /** Returns true when the click was stopped during this span. */
-    private fun advanceLocked(dtNanos: Double, sink: ClickSink?): Boolean = synchronized(lock) {
+    private fun advanceLocked(dtNanos: Double, clicks: ClickSink?): Boolean = synchronized(lock) {
+        val sink = clicks.takeUnless { clickMuted }
         val start = _transport.value
         if (!start.playing || dtNanos <= 0) return false
 
@@ -266,7 +375,21 @@ class Metronome(
             if (reachesBeat) {
                 phase = 0.0
                 beat++
-                if (beat >= s.signature.numerator) {
+                val newBar = beat >= s.signature.numerator
+                val active = activeSong()
+                if (active != null) {
+                    songBeat++
+                    if (newBar) {
+                        songBar++
+                        if (songBar >= active.loopEndBar) {
+                            songBar = active.loopStartBar
+                            songJumps++
+                        }
+                        songBeat = active.barStartBeat(songBar)
+                    }
+                    applySong(active)
+                }
+                if (newBar) {
                     beat = 0
                     bar++
                     if (s.circle.enabled && s.circle.mode == CircleMode.Bars) {
@@ -281,7 +404,9 @@ class Metronome(
             if (circleDone) {
                 completions++
                 if (s.circle.sound) sink?.click(elapsed, Voices.CHIME, 1f, false)
+                val tempoBefore = _state.value.bpm
                 runCircleActions()
+                noteTempoChange(tempoBefore)
             }
             if (reachesBeat) {
                 // A signature action may have shortened the bar.
@@ -381,9 +506,12 @@ class Metronome(
             s.circle.mode == CircleMode.Seconds -> circleElapsedNanos / (s.circle.seconds * 1e9)
             else -> (circleBars + (t.beat + t.beatPhase) / s.signature.numerator) / s.circle.bars
         }
+        val active = activeSong()
         _transport.value = t.copy(
             circleProgress = circleProgress.coerceIn(0.0, 1.0).toFloat(),
             sessionElapsedSeconds = sessionElapsedNanos / 1e9,
+            songSeconds = if (active != null && t.playing) active.secondsAt(songBeat + t.beatPhase) else -1.0,
+            songJumps = songJumps,
         )
     }
 }

@@ -1,5 +1,7 @@
 package glick.core
 
+import kotlinx.serialization.Serializable
+
 const val MIN_BPM = 5.0
 const val MAX_BPM = 5000.0
 const val SLEEP_BPM = 40.0
@@ -14,12 +16,24 @@ const val POLY_VOICES = 4
 /** Note lengths allowed as a time-signature denominator. */
 val DENOMINATORS = listOf(1, 2, 4, 8, 16, 32, 64, 128)
 
+/** How a loaded song and the click are kept together. */
+@Serializable
+enum class SongMode {
+    /** The song plays at its own speed and the click takes its tempo from the song's beats. */
+    ClickFollowsSong,
+
+    /** The click keeps the tempo that is set and the song is stretched to it. */
+    SongFollowsClick,
+}
+
 /** The tempo counts [denominator] notes per minute; a bar holds [numerator] of them. */
+@Serializable
 data class TimeSignature(val numerator: Int = 4, val denominator: Int = 4) {
     override fun toString() = "$numerator/$denominator"
 }
 
 /** How one step of a lane sounds. Tapping a step cycles through these. */
+@Serializable
 enum class StepState {
     Normal, Accent, Mute;
 
@@ -34,6 +48,7 @@ internal fun List<StepState>.fitted(size: Int): List<StepState> =
  * One subdivision lane: [division] evenly spaced clicks inside every beat.
  * [steps] holds one state per click of the whole bar, beat after beat.
  */
+@Serializable
 data class SubdivisionLine(
     val enabled: Boolean = false,
     val division: Int = 2,
@@ -42,6 +57,7 @@ data class SubdivisionLine(
 )
 
 /** One polyrhythm voice: [pulses] evenly spaced clicks across the whole bar, one of [steps] each. */
+@Serializable
 data class PolyVoice(
     val enabled: Boolean = false,
     val pulses: Int = 3,
@@ -49,11 +65,14 @@ data class PolyVoice(
     val steps: List<StepState> = emptyList(),
 )
 
+@Serializable
 data class RandomSilence(val enabled: Boolean = false, val probability: Float = 0.25f)
 
+@Serializable
 enum class CircleMode { Bars, Seconds }
 
 /** On each circle-timer completion, add [amount] to [target]. */
+@Serializable
 data class CircleAction(
     val id: Long,
     val enabled: Boolean = true,
@@ -61,6 +80,7 @@ data class CircleAction(
     val amount: Double = ParamTarget.Tempo.defaultAmount,
 )
 
+@Serializable
 data class CircleTimer(
     val enabled: Boolean = false,
     val mode: CircleMode = CircleMode.Bars,
@@ -70,14 +90,17 @@ data class CircleTimer(
     val actions: List<CircleAction> = emptyList(),
 )
 
+@Serializable
 data class SessionTimer(
     val enabled: Boolean = false,
     val minutes: Double = 10.0,
     val stopOnCompletion: Boolean = true,
 )
 
+@Serializable
 data class MidiSync(val enabled: Boolean = false, val deviceId: String? = null)
 
+@Serializable
 data class MetronomeState(
     val bpm: Double = 120.0,
     val signature: TimeSignature = TimeSignature(),
@@ -101,6 +124,9 @@ data class MetronomeState(
     val midi: MidiSync = MidiSync(),
     /** Overrides the pattern with a plain [SLEEP_BPM] click; settings are kept. */
     val sleepMode: Boolean = false,
+    /** Who leads when a song is loaded. */
+    val songMode: SongMode = SongMode.ClickFollowsSong,
+    val songLevel: Float = 0.8f,
 ) {
     /** Brings every field back inside its legal range. */
     fun sanitized(): MetronomeState {
@@ -137,6 +163,7 @@ data class MetronomeState(
                 seconds = circle.seconds.coerceIn(0.1, 86_400.0),
             ),
             session = session.copy(minutes = session.minutes.coerceIn(0.1, 6000.0)),
+            songLevel = songLevel.coerceIn(0f, 1f),
         )
     }
 
@@ -168,6 +195,7 @@ private fun whole(v: Double) = kotlin.math.round(v).toInt()
  * written as plain numbers (levels and probabilities in percent); out-of-range
  * results are clamped by [MetronomeState.sanitized].
  */
+@Serializable
 enum class ParamTarget(
     val label: String,
     val unit: String,

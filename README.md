@@ -21,6 +21,17 @@ sample by the audio thread, so its timing does not depend on the UI.
 - A sleep mode: a plain 40 BPM click.
 - An activity log of every run.
 - A choice of audio output device, with a dropout counter.
+- Everything is remembered: the app reopens with the settings, timer progress,
+  window and song it was closed with.
+- A song view: load a WAV, FLAC or MP3 file and give it beats. If you know
+  its tempo, it gets a steady grid that you slide onto the first beat; if
+  not, you record the tempo by tapping along while it plays. Taps can be
+  snapped to the nearest attacks or smoothed. Automatic detection is there
+  as an option. Move, add or delete beats, set bar starts and signature
+  changes, and loop any range of bars. Then either the click follows the
+  song's tempo, or the song is time-stretched (without changing its pitch)
+  to the click. Tempo changes, including those made by the circle timer,
+  keep both in sync. Each song's map is saved automatically.
 
 MIDI clock sync has a panel but is not connected yet.
 
@@ -54,7 +65,7 @@ The Android SDK is only needed for the Android app.
 The modules:
 
 - `core` holds the metronome itself (state, transport, click synth, audio
-  engine). It is plain Kotlin and also compiles to Kotlin/Native for Linux and
+  engine) and the song tools (beat detection, time stretching). It is plain Kotlin and also compiles to Kotlin/Native for Linux and
   Windows.
 - `app` is the Compose UI, shared by desktop and Android, plus the desktop app.
 - `androidApp` is the Android app.
@@ -80,3 +91,8 @@ and written with Claude Code.
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+The desktop app bundles two open-source libraries for reading audio files,
+each under its own licence: JLayer (MP3, LGPL) and jFLAC (FLAC). They are used
+unmodified, as separate jar files; see their projects for the exact terms. The
+Android app does not contain them.

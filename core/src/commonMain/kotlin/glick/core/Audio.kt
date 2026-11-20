@@ -1,14 +1,17 @@
 package glick.core
 
+import glick.core.song.AudioSource
+import glick.core.song.TimeStretcher
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.concurrent.Volatile
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Turns the metronome into sound. Whoever owns the audio device calls [render]
- * for each block; that call also moves the transport, so the sample counter is
- * the clock and every click lands on its exact sample.
+ * Turns the metronome, and the song loaded into it, into sound. Whoever owns
+ * the audio device calls [render] for each block; that call also moves the
+ * transport, so the sample counter is the clock and every click lands on its
+ * exact sample.
  */
 class ClickEngine(private val metronome: Metronome, val sampleRate: Int) {
     // Two sounds per voice: the plain one, then its accent (same voice, higher pitch).
@@ -46,14 +49,25 @@ class ClickEngine(private val metronome: Metronome, val sampleRate: Int) {
         testRequested = true
     }
 
-    /** Fills the first [frames] samples of [out] with mono audio. */
-    fun render(out: FloatArray, frames: Int) {
-        out.fill(0f, 0, frames)
+    // The loaded song, as last seen by the audio thread.
+    private var songSource: AudioSource? = null
+    private var stretcher: TimeStretcher? = null
+    private var songLeft = FloatArray(0)
+    private var songRight = FloatArray(0)
+    private var lastSongFrame = -1.0
+    private var lastSongStep = 1.0
+    private var lastSongJumps = 0
+
+    /** Fills the first [frames] samples of [left] and [right]. */
+    fun render(left: FloatArray, right: FloatArray, frames: Int) {
+        left.fill(0f, 0, frames)
+        right.fill(0f, 0, frames)
         if (testRequested) {
             testRequested = false
             start(Voices.BEAT * 2, 0, 1f)
         }
         metronome.advance(frames * 1e9 / sampleRate, sink)
+        renderSong(left, right, frames)
 
         var kept = 0
         for (slot in 0 until playing) {
@@ -62,7 +76,11 @@ class ClickEngine(private val metronome: Metronome, val sampleRate: Int) {
             val gain = playingGain[slot]
             val first = if (position < 0) -position else 0
             val last = min(frames, sound.size - position)
-            for (i in first until last) out[i] += sound[position + i] * gain
+            for (i in first until last) {
+                val sample = sound[position + i] * gain
+                left[i] += sample
+                right[i] += sample
+            }
             if (position + frames < sound.size) {
                 playingSound[kept] = playingSound[slot]
                 playingPosition[kept] = position + frames
@@ -73,7 +91,60 @@ class ClickEngine(private val metronome: Metronome, val sampleRate: Int) {
         playing = kept
 
         val master = volume
-        for (i in 0 until frames) out[i] = (out[i] * master).coerceIn(-1f, 1f)
+        for (i in 0 until frames) {
+            left[i] = (left[i] * master).coerceIn(-1f, 1f)
+            right[i] = (right[i] * master).coerceIn(-1f, 1f)
+        }
+    }
+
+    /**
+     * Plays the span of the song that the transport crossed during this block.
+     * The transport says where in the file the block ends; the block started
+     * where the previous one ended, so the stretcher gets an exact mapping and
+     * the song cannot drift from the click.
+     */
+    private fun renderSong(left: FloatArray, right: FloatArray, frames: Int) {
+        val source = metronome.songAudio
+        if (source !== songSource) {
+            songSource = source
+            // A song prepared for another sample rate would play at the wrong pitch, so it stays silent.
+            stretcher = source?.takeIf { it.sampleRate == sampleRate }?.let(::TimeStretcher)
+            lastSongFrame = -1.0
+        }
+        val active = stretcher ?: return
+        if (songLeft.size < frames) {
+            songLeft = FloatArray(frames)
+            songRight = FloatArray(frames)
+        }
+
+        val transport = metronome.transport.value
+        val playingNow = transport.songSeconds >= 0
+        if (!playingNow && lastSongFrame < 0) return
+
+        val level = metronome.state.value.songLevel
+        if (!playingNow) {
+            // The click just stopped: let the song run on for one block while it fades out.
+            active.render(songLeft, songRight, frames, lastSongFrame, lastSongStep, false)
+            for (i in 0 until frames) {
+                val fade = level * (1f - (i + 1f) / frames)
+                left[i] += songLeft[i] * fade
+                right[i] += songRight[i] * fade
+            }
+            lastSongFrame = -1.0
+            return
+        }
+
+        val endFrame = transport.songSeconds * sampleRate
+        val jump = lastSongFrame < 0 || transport.songJumps != lastSongJumps
+        val step = if (jump) lastSongStep else (endFrame - lastSongFrame) / frames
+        active.render(songLeft, songRight, frames, endFrame - step * frames, step, jump)
+        for (i in 0 until frames) {
+            left[i] += songLeft[i] * level
+            right[i] += songRight[i] * level
+        }
+        lastSongFrame = endFrame
+        lastSongStep = step
+        lastSongJumps = transport.songJumps
     }
 
     private fun start(sound: Int, offsetFrames: Int, level: Float) {

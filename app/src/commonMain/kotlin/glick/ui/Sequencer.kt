@@ -24,6 +24,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -109,15 +111,16 @@ fun Sequencer(
                 LevelSlider(state.beatLevel, { v -> update { it.copy(beatLevel = v) } }, Modifier.weight(1f))
             },
         ) { gridModifier ->
-            Canvas(
+            CellLane(
+                barPhase,
                 gridModifier.stepTaps(beats, !sleep) { index ->
                     update { it.copy(beatSteps = it.beatSteps.cycled(index)) }
                 },
-            ) {
+            ) { phase, playhead ->
                 drawCells(
-                    cells = beats, phase = barPhase(), enabled = true, level = state.beatLevel,
+                    cells = beats, phase = phase, playhead = playhead, enabled = true, level = state.beatLevel,
                     color = Palette.Beat, step = { if (sleep) StepState.Normal else state.beatSteps[it] },
-                    hollow = transport().beatSilenced, measurer = measurer, label = { null },
+                    hollow = playhead && transport().beatSilenced, measurer = measurer, label = { null },
                 )
             }
         }
@@ -138,15 +141,16 @@ fun Sequencer(
                 },
             ) { gridModifier ->
                 val cells = beats * line.division
-                Canvas(
+                CellLane(
+                    barPhase,
                     gridModifier.stepTaps(cells, !sleep) { index ->
                         update { s -> s.withSub(i) { it.copy(steps = it.steps.cycled(index)) } }
                     },
-                ) {
+                ) { phase, playhead ->
                     drawCells(
-                        cells = cells, phase = barPhase(), enabled = on, level = line.level,
+                        cells = cells, phase = phase, playhead = playhead, enabled = on, level = line.level,
                         color = Palette.Sub, step = { line.steps[it] },
-                        hollow = transport().beatSilenced, measurer = measurer,
+                        hollow = playhead && transport().beatSilenced, measurer = measurer,
                         strong = { it % line.division == 0 },
                         label = { (it % line.division + 1).toString() },
                     )
@@ -169,13 +173,14 @@ fun Sequencer(
                     )
                 },
             ) { gridModifier ->
-                Canvas(
+                CellLane(
+                    barPhase,
                     gridModifier.stepTaps(voice.pulses, !sleep) { index ->
                         update { s -> s.withPoly(i) { it.copy(steps = it.steps.cycled(index)) } }
                     },
-                ) {
+                ) { phase, playhead ->
                     drawCells(
-                        cells = voice.pulses, phase = barPhase(), enabled = on, level = voice.level,
+                        cells = voice.pulses, phase = phase, playhead = playhead, enabled = on, level = voice.level,
                         color = Palette.Poly, step = { voice.steps[it] }, hollow = false, measurer = measurer,
                         label = { (it + 1).toString() },
                     )
@@ -259,13 +264,33 @@ private fun DrawScope.centredText(
 }
 
 /**
- * Draws one lane of [cells] equal steps. The step under the playhead lights up
- * and fades until the next one; with [hollow] it is only outlined, which is how
- * a randomly silenced beat shows.
+ * One lane of steps, drawn in two layers: the steps themselves, which change
+ * only when the pattern is edited and are kept as a picture, and on top the
+ * one lit step under the playhead, which is all that is redrawn every frame.
+ */
+@Composable
+private fun CellLane(
+    phase: () -> Double,
+    modifier: Modifier,
+    draw: DrawScope.(phase: Double, playhead: Boolean) -> Unit,
+) {
+    Box(modifier) {
+        Canvas(Modifier.matchParentSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }) {
+            draw(-1.0, false)
+        }
+        Canvas(Modifier.matchParentSize()) { draw(phase(), true) }
+    }
+}
+
+/**
+ * Draws one lane of [cells] equal steps. With [playhead] false it draws every
+ * step at rest; with [playhead] true it draws only the highlight of the step
+ * the playhead is in.
  */
 private fun DrawScope.drawCells(
     cells: Int,
     phase: Double,
+    playhead: Boolean,
     enabled: Boolean,
     level: Float,
     color: Color,
@@ -287,7 +312,8 @@ private fun DrawScope.drawCells(
     val glow = if (active < 0) 0f else (1.0 - (position - active)).toFloat().coerceIn(0f, 1f)
     val showLabels = cell >= 16.dp.toPx()
 
-    for (i in 0 until cells) {
+    if (playhead && active < 0) return
+    for (i in if (playhead) active..active else 0 until cells) {
         val topLeft = Offset(i * cell + gap / 2, 0f)
         val cellSize = Size((cell - gap).coerceAtLeast(1f), size.height)
         val state = step(i)
@@ -301,7 +327,7 @@ private fun DrawScope.drawCells(
             // A muted step is an empty frame: the slot stays visible, nothing sounds.
             val inset = Offset(topLeft.x + 0.75.dp.toPx(), 0.75.dp.toPx())
             val frame = Size((cellSize.width - 1.5.dp.toPx()).coerceAtLeast(1f), cellSize.height - 1.5.dp.toPx())
-            drawRoundRect(Palette.Off.copy(alpha = if (i == active) 1f else 0.7f), inset, frame, corner, style = Stroke(1.5.dp.toPx()))
+            drawRoundRect(Palette.Off.copy(alpha = if (playhead) 1f else 0.7f), inset, frame, corner, style = Stroke(1.5.dp.toPx()))
         } else {
             val rest = when {
                 !enabled && state == StepState.Accent -> 0.9f
@@ -310,8 +336,8 @@ private fun DrawScope.drawCells(
                 strong(i) -> 0.16f + 0.26f * level
                 else -> 0.08f + 0.18f * level
             }
-            drawRoundRect(base.copy(alpha = rest), topLeft, cellSize, corner)
-            if (i == active) {
+            if (!playhead) drawRoundRect(base.copy(alpha = rest), topLeft, cellSize, corner)
+            if (playhead) {
                 if (hollow) {
                     drawRoundRect(base.copy(alpha = glow), topLeft, cellSize, corner, style = Stroke(1.5.dp.toPx()))
                 } else {
@@ -319,7 +345,8 @@ private fun DrawScope.drawCells(
                 }
             }
         }
-        if (showLabels) {
+        // At rest every label is drawn; the playhead redraws only a label it lights up.
+        if (showLabels && (!playhead || lit)) {
             val text = label(i) ?: continue
             centredText(
                 measurer, text, i * cell, cell,
