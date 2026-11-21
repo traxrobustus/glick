@@ -30,6 +30,17 @@ fun pickSongFile(): SongRef? {
 
 private val SUPPORTED = listOf("wav", "flac", "mp3")
 
+/** Opens the system file chooser for a backup archive: where to save one, or which one to read. */
+fun pickBackupFile(save: Boolean): File? {
+    val dialog = FileDialog(null as Frame?, if (save) "Save the backup" else "Open a backup", if (save) FileDialog.SAVE else FileDialog.LOAD)
+    if (save) dialog.file = "glick-backup-${java.time.LocalDate.now()}.zip"
+    else dialog.setFilenameFilter { _, name -> name.endsWith(".zip", ignoreCase = true) }
+    dialog.isVisible = true
+    val name = dialog.file ?: return null
+    val file = File(dialog.directory, name)
+    return if (save && !file.name.contains('.')) File(file.path + ".zip") else file
+}
+
 /** Decodes WAV with Java Sound, MP3 with JLayer and FLAC with jFLAC. */
 class DesktopAudioDecoder : AudioFileDecoder {
     override fun fingerprint(id: String): String = File(id).let { "${it.length()}-${it.lastModified()}" }

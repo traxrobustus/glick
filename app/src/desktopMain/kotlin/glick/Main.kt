@@ -16,7 +16,11 @@ import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import glick.core.FileActivityLogStore
+import glick.core.BackupActions
 import glick.core.FilePatternStore
+import glick.core.backup.AudioAccess
+import glick.core.backup.Backup
+import glick.core.backup.BackupPlaces
 import glick.core.FileTextStore
 import glick.core.Metronome
 import glick.core.MetronomeState
@@ -59,6 +63,7 @@ fun main() = application {
         App(app.metronome, midiPorts = ::midiInputPorts, audio = app.audio, song = app.song, 
             // The file chooser blocks until it is closed, so it must not run on the UI thread.
             pickSong = { withContext(Dispatchers.IO) { pickSongFile() } },
+            backup = app.backup,
         )
     }
 }
@@ -84,6 +89,32 @@ private class DesktopApp(scope: CoroutineScope) {
     val audio = DesktopAudio(metronome, directory)
     val song = SongSession(metronome, CachingSongLibrary(DesktopAudioDecoder(), File(directory, "cache")), documents, scope)
     private val keeper = SnapshotKeeper(metronome, song, documents, scope).also { it.window = snapshot?.window }
+
+    val backup = object : BackupActions {
+        private val places = BackupPlaces(directory, File(directory, "audio"))
+        private val audioFiles = object : AudioAccess {
+            override fun open(id: String) = File(id).takeIf { it.isFile }?.inputStream()
+            override fun idOf(file: File): String = file.absolutePath
+        }
+
+        override suspend fun export(includeAudio: Boolean): String? = withContext(Dispatchers.IO) {
+            val target = pickBackupFile(save = true) ?: return@withContext null
+            // What is on screen may not be on disk yet.
+            keeper.saveNow()
+            song.flush()
+            val report = target.outputStream().use { Backup.export(places, audioFiles, includeAudio, it) }
+            report.describe("Exported") + " Saved as ${target.name}."
+        }
+
+        override suspend fun import(replace: Boolean): String? {
+            val report = withContext(Dispatchers.IO) {
+                val source = pickBackupFile(save = false) ?: return@withContext null
+                source.inputStream().use { Backup.import(places, audioFiles, it, replace) }
+            } ?: return null
+            Backup.apply(report, replace, metronome, song)
+            return report.describe("Imported")
+        }
+    }
 
     init {
         snapshot?.song?.let { song.load(it, audio.status.value.sampleRate.takeIf { rate -> rate > 0 } ?: 48_000) }

@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import glick.core.AudioOutput
+import glick.core.BackupActions
 import glick.core.Metronome
 import glick.core.MidiPort
 import glick.core.SLEEP_BPM
@@ -53,11 +54,13 @@ fun App(
     audio: AudioOutput? = null,
     song: SongSession? = null,
     pickSong: (suspend () -> SongRef?)? = null,
+    backup: BackupActions? = null,
 ) {
     val state by metronome.state.collectAsState()
     val transport = metronome.transport.collectAsState()
     val playing by remember { derivedStateOf { transport.value.playing } }
     var showLog by remember { mutableStateOf(false) }
+    var showBackup by remember { mutableStateOf(false) }
     var showAudio by remember { mutableStateOf(false) }
     var showPatterns by remember { mutableStateOf(false) }
     var showSong by remember { mutableStateOf(false) }
@@ -112,7 +115,7 @@ fun App(
                         Palette.Muted,
                     )
                     TextButton(
-                        "Sleep mode",
+                        if (compact) "Sleep" else "Sleep mode",
                         onClick = { metronome.update { it.copy(sleepMode = !it.sleepMode) } },
                         selected = state.sleepMode,
                         color = Palette.Poly,
@@ -128,7 +131,8 @@ fun App(
                             color = Palette.Accent,
                         )
                     }
-                    TextButton("Activity log", onClick = { showLog = true })
+                    TextButton(if (compact) "Log" else "Activity log", onClick = { showLog = true })
+                    if (backup != null) TextButton("Backup", onClick = { showBackup = true })
                 }
 
                 val tempo = @Composable { m: Modifier -> TempoPanel(state, playing, metronome::update, metronome::toggle, m) }
@@ -213,12 +217,12 @@ fun App(
             }
 
             if (showLog) LogOverlay(metronome) { showLog = false }
+            if (showBackup && backup != null) BackupOverlay(backup) { showBackup = false }
             if (showPatterns) PatternOverlay(metronome) { showPatterns = false }
             if (showAudio && audio != null) AudioOverlay(audio) { showAudio = false }
             tempoQuestion?.let { ref ->
                 SongTempoOverlay(
                     ref,
-                    initialSignature = state.signature,
                     onLoad = { setup ->
                         tempoQuestion = null
                         song?.load(ref, sampleRate, setup)

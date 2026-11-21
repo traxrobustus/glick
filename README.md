@@ -19,7 +19,9 @@ sample by the audio thread, so its timing does not depend on the UI.
 - A session timer that pauses with the click and can stop it when time is up.
 - Random beat silence with an adjustable probability.
 - A sleep mode: a plain 40 BPM click.
-- An activity log of every run.
+- An activity log, grouped by day with each day's total practice time.
+- Backups: one file with the settings, patterns, log and songs (audio files
+  included if wanted), to export and to import on another device.
 - A choice of audio output device, with a dropout counter.
 - On Android the click keeps playing with the screen locked or the app in the
   background, with a notification to stop it.
@@ -34,6 +36,12 @@ sample by the audio thread, so its timing does not depend on the UI.
   song's tempo, or the song is time-stretched (without changing its pitch)
   to the click. Tempo changes, including those made by the circle timer,
   keep both in sync. Each song's map is saved automatically.
+- Time signatures on a track above the waveform: tap a bar to start a new
+  signature there, change it or remove it.
+- Song variations: store several loop zones of a song, each with its own
+  mode, tempo and workout settings, and switch between them.
+- A song workout: the loop is played from a starting tempo, a step faster on
+  every pass, up to a maximum (the song's own tempo, or faster), then stops.
 
 MIDI clock sync has a panel but is not connected yet.
 

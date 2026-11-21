@@ -12,7 +12,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import glick.core.BackupActions
 import glick.core.FileActivityLogStore
+import glick.core.backup.AudioAccess
+import glick.core.backup.Backup
+import glick.core.backup.BackupPlaces
 import glick.core.FilePatternStore
 import glick.core.FileTextStore
 import glick.core.Metronome
@@ -30,6 +34,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -71,6 +76,8 @@ class GlickApplication : Application() {
         snapshot?.song?.let { song.load(it, audio.status.value.sampleRate.takeIf { rate -> rate > 0 } ?: 48_000) }
     }
 
+    val backupPlaces: BackupPlaces get() = BackupPlaces(filesDir, File(filesDir, "audio"))
+
     /** Called when the app leaves the screen: Android may end the process at any time after that. */
     fun saveNow() {
         keeper.saveNow()
@@ -89,6 +96,49 @@ class MainActivity : ComponentActivity() {
         }
         pendingPick?.complete(ref)
         pendingPick = null
+    }
+
+    private var pendingDocument: CompletableDeferred<Uri?>? = null
+    private val saver = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri: Uri? ->
+        pendingDocument?.complete(uri)
+        pendingDocument = null
+    }
+    private val opener = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        pendingDocument?.complete(uri)
+        pendingDocument = null
+    }
+
+    /** Backups go through Android's own file chooser, so they can be saved to Drive or any folder. */
+    private val backup = object : BackupActions {
+        private val audioFiles = object : AudioAccess {
+            override fun open(id: String) = runCatching { contentResolver.openInputStream(Uri.parse(id)) }.getOrNull()
+            override fun idOf(file: File): String = Uri.fromFile(file).toString()
+        }
+
+        override suspend fun export(includeAudio: Boolean): String? {
+            val app = application as GlickApplication
+            val asked = CompletableDeferred<Uri?>().also { pendingDocument = it }
+            saver.launch("glick-backup-${java.time.LocalDate.now()}.zip")
+            val target = asked.await() ?: return null
+            return withContext(Dispatchers.IO) {
+                app.saveNow()
+                val out = contentResolver.openOutputStream(target) ?: error("the file could not be written")
+                out.use { Backup.export(app.backupPlaces, audioFiles, includeAudio, it) }.describe("Exported")
+            }
+        }
+
+        override suspend fun import(replace: Boolean): String? {
+            val app = application as GlickApplication
+            val asked = CompletableDeferred<Uri?>().also { pendingDocument = it }
+            opener.launch(arrayOf("application/zip", "application/octet-stream"))
+            val source = asked.await() ?: return null
+            val report = withContext(Dispatchers.IO) {
+                val input = contentResolver.openInputStream(source) ?: error("the file could not be read")
+                input.use { Backup.import(app.backupPlaces, audioFiles, it, replace) }
+            }
+            Backup.apply(report, replace, app.metronome, app.song)
+            return report.describe("Imported")
+        }
     }
 
     private suspend fun pickSong(): SongRef? {
@@ -112,7 +162,7 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val app = application as GlickApplication
         setContent {
-            App(app.metronome, midiPorts = { emptyList() }, audio = app.audio, song = app.song, pickSong = ::pickSong)
+            App(app.metronome, midiPorts = { emptyList() }, audio = app.audio, song = app.song, pickSong = ::pickSong, backup = backup)
         }
     }
 

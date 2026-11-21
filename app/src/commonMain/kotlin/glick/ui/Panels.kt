@@ -49,6 +49,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import glick.core.BackupActions
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import glick.core.AudioOutput
 import glick.core.CircleAction
 import glick.core.CircleMode
@@ -256,8 +259,19 @@ fun CirclePanel(
                         Stepper(circle.bars, { v -> setCircle { it.copy(bars = v) } }, 1..9999)
                         Label("bars", color = Palette.Muted)
                     } else {
-                        NumberField(circle.seconds, { v -> setCircle { it.copy(seconds = v) } }, 0.1, 86_400.0, decimals = 1, width = 64.dp)
-                        Label("sec", color = Palette.Muted)
+                        // Minutes and seconds, so that "every 2:30" needs no arithmetic.
+                        val minutes = (circle.seconds / 60).toInt()
+                        val seconds = circle.seconds - minutes * 60
+                        NumberField(
+                            minutes.toDouble(), { v -> setCircle { it.copy(seconds = v.toInt() * 60 + seconds) } },
+                            0.0, 1440.0, width = 38.dp,
+                        )
+                        Label(":", color = Palette.Muted)
+                        NumberField(
+                            seconds, { v -> setCircle { it.copy(seconds = minutes * 60 + v) } },
+                            0.0, 59.9, decimals = 1, width = 44.dp,
+                        )
+                        Label("m:s", color = Palette.Muted)
                     }
                 }
                 TextButton("Reset", onClick = metronome::resetCircle)
@@ -584,21 +598,54 @@ fun PatternOverlay(metronome: Metronome, onClose: () -> Unit) {
     }
 }
 
+/**
+ * The activity log as a tree: one row per day with that day's total, and
+ * under it the day's runs. The latest day starts open.
+ */
 @Composable
 fun LogOverlay(metronome: Metronome, onClose: () -> Unit) {
     val entries by metronome.log.collectAsStateCompat()
+    // Days newest first; within a day the runs in the order they were played.
+    val days = remember(entries) {
+        entries.groupBy { formatDateTime(it.startEpochMillis).take(10) }.toList().sortedByDescending { it.first }
+    }
+    var open by remember(days.firstOrNull()?.first) { mutableStateOf(setOfNotNull(days.firstOrNull()?.first)) }
+
     Overlay("Activity log", onClose, actions = { TextButton("Clear", onClick = metronome::clearLog) }) {
-            val totalSeconds = entries.sumOf { it.durationMillis } / 1000.0
-            Label("${entries.size} runs · ${formatClock(totalSeconds)} of click in total", color = Palette.Muted)
-            if (entries.isEmpty()) {
-                Label("Nothing yet. Each run is recorded when the click stops.", color = Palette.Muted)
-            }
-            androidx.compose.foundation.lazy.LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(entries.size) { index ->
-                    val entry = entries[entries.lastIndex - index]
+        val totalSeconds = entries.sumOf { it.durationMillis } / 1000.0
+        Label("${days.size} days · ${entries.size} runs · ${formatClock(totalSeconds)} in total", color = Palette.Muted)
+        if (entries.isEmpty()) {
+            Label("Nothing yet. Each run is recorded when the click stops.", color = Palette.Muted)
+        }
+        Column(
+            Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            for ((day, runs) in days) {
+                val expanded = day in open
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Palette.Off)
+                        .clickable { open = if (expanded) open - day else open + day }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(if (expanded) "−" else "+", color = Palette.Beat, fontSize = 15.sp, fontFamily = FontFamily.Monospace)
+                    Text(day, color = Palette.Text, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                    Text(
+                        formatClock(runs.sumOf { it.durationMillis } / 1000.0),
+                        color = Palette.Beat, fontSize = 13.sp, fontFamily = FontFamily.Monospace,
+                    )
+                    Label("${runs.size} run${if (runs.size == 1) "" else "s"}", Modifier.weight(1f), Palette.Muted)
+                }
+                if (expanded) for (entry in runs) {
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .padding(start = 22.dp)
                             .clip(RoundedCornerShape(6.dp))
                             .background(Palette.Inset)
                             .padding(horizontal = 10.dp, vertical = 7.dp),
@@ -606,23 +653,85 @@ fun LogOverlay(metronome: Metronome, onClose: () -> Unit) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            formatDateTime(entry.startEpochMillis),
+                            formatDateTime(entry.startEpochMillis).drop(11),
                             color = Palette.Text, fontSize = 13.sp, fontFamily = FontFamily.Monospace,
                         )
                         Text(
                             formatClock(entry.durationMillis / 1000.0),
                             color = Palette.Beat, fontSize = 13.sp, fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.width(64.dp),
+                            modifier = Modifier.width(56.dp),
                         )
                         val tempo = if (entry.startBpm == entry.endBpm) formatNumber(entry.startBpm, 1)
                         else "${formatNumber(entry.startBpm, 1)} → ${formatNumber(entry.endBpm, 1)}"
+                        val what = if (entry.sleepMode) "Sleep mode · $tempo BPM" else "$tempo BPM · ${entry.signature}"
                         Label(
-                            if (entry.sleepMode) "Sleep mode · $tempo BPM" else "$tempo BPM · ${entry.signature}",
+                            if (entry.label.isEmpty()) what else "${entry.label} · $what",
                             Modifier.weight(1f),
-                            Palette.Muted,
+                            if (entry.label.isEmpty()) Palette.Muted else Palette.Text,
                         )
                     }
                 }
             }
+        }
+    }
+}
+
+/** Saving everything into one archive file, and reading one back. */
+@Composable
+fun BackupOverlay(backup: BackupActions, onClose: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var includeAudio by remember { mutableStateOf(true) }
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    var confirmReplace by remember { mutableStateOf(false) }
+
+    fun run(action: suspend () -> String?) {
+        if (busy) return
+        busy = true
+        result = null
+        scope.launch {
+            try {
+                result = action()
+                failed = false
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                result = "It did not work: ${e.message ?: e::class.simpleName}"
+                failed = true
+            } finally {
+                busy = false
+                confirmReplace = false
+            }
+        }
+    }
+
+    Overlay("Backup", onClose) {
+        Text(
+            "A backup is one file with your settings, patterns, activity log and every song's beats, " +
+                "time signatures and variations. Import it on another device to carry on there.",
+            color = Palette.Muted, fontSize = 13.sp,
+        )
+        CheckRow("Include the audio files of the songs", includeAudio, { includeAudio = it })
+        TextButton("Export a backup…", { run { backup.export(includeAudio) } }, selected = true)
+
+        Label("Import", color = Palette.Muted)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton("Add to what is here…", { run { backup.import(replace = false) } })
+            TextButton(
+                if (confirmReplace) "Tap again: everything here is deleted first" else "Replace everything…",
+                { if (confirmReplace) run { backup.import(replace = true) } else confirmReplace = true },
+                selected = confirmReplace,
+                color = Palette.Accent,
+            )
+        }
+        Text(
+            "Adding keeps what is on this device; where both have the same song or pattern, the backup's version is used.",
+            color = Palette.Muted, fontSize = 13.sp,
+        )
+        when {
+            busy -> Label("Working…", color = Palette.Beat)
+            result != null -> Text(result!!, color = if (failed) Palette.Accent else Palette.Sub, fontSize = 13.sp)
+        }
     }
 }
