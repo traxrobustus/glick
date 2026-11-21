@@ -613,7 +613,20 @@ fun LogOverlay(metronome: Metronome, onClose: () -> Unit) {
     }
     var open by remember(days.firstOrNull()?.first) { mutableStateOf(setOfNotNull(days.firstOrNull()?.first)) }
 
-    Overlay("Activity log", onClose, actions = { TextButton("Clear", onClick = metronome::clearLog) }) {
+    // Clearing cannot be undone, so it takes a second tap.
+    var confirmClear by remember { mutableStateOf(false) }
+
+    Overlay(
+        "Activity log", onClose,
+        actions = {
+            if (confirmClear) {
+                TextButton("Erase everything", onClick = { metronome.clearLog(); confirmClear = false }, selected = true, color = Palette.Accent)
+                TextButton("Keep", onClick = { confirmClear = false })
+            } else if (entries.isNotEmpty()) {
+                TextButton("Clear", onClick = { confirmClear = true })
+            }
+        },
+    ) {
         val totalSeconds = entries.sumOf { it.durationMillis } / 1000.0
         Label(
             "${days.size} day${if (days.size == 1) "" else "s"} · ${entries.size} run${if (entries.size == 1) "" else "s"} · " +

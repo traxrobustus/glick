@@ -309,6 +309,9 @@ class Metronome(
             playing = false, beat = 0, beatPhase = 0.0, beatSilenced = false, songSeconds = -1.0,
             workoutPass = -1, workoutBpm = 0.0,
         )
+        // The run is logged with the tempo it ended at: a workout's last pass, not the
+        // tempo that comes back below.
+        val endBpm = _state.value.effective().bpm
         // A workout borrowed the tempo for its ladder; it goes back to what it was.
         if (workoutPass >= 0) {
             workoutPass = -1
@@ -321,7 +324,7 @@ class Metronome(
             startEpochMillis = runStartMillis,
             endEpochMillis = nowEpochMillis(),
             startBpm = runStartBpm,
-            endBpm = s.effective().bpm,
+            endBpm = endBpm,
             signature = s.signature.toString(),
             sleepMode = s.sleepMode,
             label = if (activeSong() != null) songName.orEmpty() else "",

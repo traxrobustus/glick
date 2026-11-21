@@ -18,6 +18,7 @@ import java.io.File
 import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -26,7 +27,12 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class BackupTest {
-    private fun folder(): File = Files.createTempDirectory("glick-backup-test").toFile().apply { deleteOnExit() }
+    private val folders = mutableListOf<File>()
+
+    private fun folder(): File = Files.createTempDirectory("glick-backup-test").toFile().also { folders += it }
+
+    @AfterTest
+    fun removeFolders() = folders.forEach { it.deleteRecursively() }
 
     /** Songs are plain files here, and a file's id is its path. */
     private val files = object : AudioAccess {

@@ -89,14 +89,26 @@ class SongSession(
     /** Makes variation [index] of the song the one in use: its loop and its practice settings. */
     fun selectVariation(index: Int) {
         if (_view.value.grid?.variations?.getOrNull(index) == null) return
-        edit { it.withVariation(index) }
-        applyVariationSettings()
+        switching { it.withVariation(index) }
     }
 
     fun addVariation() = edit { it.capturing(metronome.state.value).addVariation() }
 
-    fun deleteVariation() {
-        edit { it.deleteVariation() }
+    fun deleteVariation() = switching { it.deleteVariation() }
+
+    /**
+     * Changes which variation is in use. The settings in force belong to the one being
+     * left, so they must not be written into the one arriving before its own are applied.
+     */
+    private fun switching(transform: (SongGrid) -> SongGrid) {
+        // What is in force is first written into the one being left, in case it was only just set.
+        val leaving = metronome.state.value.takeIf { !metronome.transport.value.playing }
+        applyingVariation = true
+        try {
+            edit { transform(if (leaving != null) it.capturing(leaving) else it) }
+        } finally {
+            applyingVariation = false
+        }
         applyVariationSettings()
     }
 
@@ -113,9 +125,11 @@ class SongSession(
                 if (chosen.songMode == SongMode.SongFollowsClick) {
                     it.copy(songMode = chosen.songMode, bpm = chosen.bpm, workout = chosen.workout)
                 } else {
-                    it.copy(songMode = chosen.songMode, songSpeed = chosen.songSpeed, workout = chosen.workout)
+                    it.copy(songMode = chosen.songMode, workout = chosen.workout)
                 }
             }
+            // Entering follow mode starts at the song's own speed; the variation's comes on top.
+            if (chosen.songMode != SongMode.SongFollowsClick) metronome.update { it.copy(songSpeed = chosen.songSpeed) }
         } finally {
             applyingVariation = false
         }

@@ -38,6 +38,10 @@ class WorkoutAndVariationsTest {
         // Afterwards nothing of the ladder is left: no pass shown, and the tempo is the one from before.
         assertEquals(-1, m.transport.value.workoutPass)
         assertEquals(startTempo, m.state.value.bpm, 0.01)
+        // The log shows the ladder, from the first pass's tempo to the last one's.
+        val entry = m.log.value.single()
+        assertEquals(tempos.first(), entry.startBpm, 0.01)
+        assertEquals(tempos.last(), entry.endBpm, 0.01)
         return tempos to seconds
     }
 
