@@ -128,12 +128,15 @@ object Backup {
                 File(places.data, LOG).delete()
             }
 
-            // Songs: audio that came along is stored here and the song then points at that copy.
+            // Songs: audio that came along is stored here and the song then points at that copy,
+            // unless this device already has the song under the same location (a backup read
+            // back where it was made), which then just gets the archive's map.
+            val known = SongSession.readLibrary(store).map { it.id }.toSet()
             val renamed = mutableMapOf<String, SongRef>()
             var audioFiles = 0
             for (song in manifest.songs) {
                 val source = song.audio?.let { File(unpacked, it) }?.takeIf { it.isFile }
-                val ref = if (source == null) SongRef(song.id, song.name) else {
+                val ref = if (source == null || song.id in known) SongRef(song.id, song.name) else {
                     places.importedAudio.mkdirs()
                     val target = File(places.importedAudio, "${sha256(source).take(12)}-${safeName(song.name)}")
                     if (!target.exists()) source.copyTo(target)

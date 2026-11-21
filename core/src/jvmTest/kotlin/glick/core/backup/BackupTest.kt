@@ -158,4 +158,14 @@ class BackupTest {
         assertFalse(File(root, "escaped.txt").exists())
         assertFalse(File(target.data, ".import").exists())
     }
+
+    @Test
+    fun readingABackupBackWhereItWasMadeDoesNotDuplicateItsSongs() {
+        val source = device(folder())
+        val (bytes, _) = archive(source)
+        val before = SongSession.readLibrary(FileTextStore(source.data))
+        Backup.import(source, files, ByteArrayInputStream(bytes), replace = false)
+        assertEquals(before, SongSession.readLibrary(FileTextStore(source.data)))
+        assertFalse(source.importedAudio.exists())
+    }
 }
