@@ -422,6 +422,8 @@ internal fun Overlay(
     actions: @Composable () -> Unit = {},
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
+    // On a phone the Back button closes the sheet, as it would a dialog.
+    BackHandler(onBack = onClose)
     Box(
         Modifier
             .fillMaxSize()
@@ -613,7 +615,11 @@ fun LogOverlay(metronome: Metronome, onClose: () -> Unit) {
 
     Overlay("Activity log", onClose, actions = { TextButton("Clear", onClick = metronome::clearLog) }) {
         val totalSeconds = entries.sumOf { it.durationMillis } / 1000.0
-        Label("${days.size} days · ${entries.size} runs · ${formatClock(totalSeconds)} in total", color = Palette.Muted)
+        Label(
+            "${days.size} day${if (days.size == 1) "" else "s"} · ${entries.size} run${if (entries.size == 1) "" else "s"} · " +
+                "${formatClock(totalSeconds)} in total",
+            color = Palette.Muted,
+        )
         if (entries.isEmpty()) {
             Label("Nothing yet. Each run is recorded when the click stops.", color = Palette.Muted)
         }
@@ -661,13 +667,16 @@ fun LogOverlay(metronome: Metronome, onClose: () -> Unit) {
                             color = Palette.Beat, fontSize = 13.sp, fontFamily = FontFamily.Monospace,
                             modifier = Modifier.width(56.dp),
                         )
-                        val tempo = if (entry.startBpm == entry.endBpm) formatNumber(entry.startBpm, 1)
-                        else "${formatNumber(entry.startBpm, 1)} → ${formatNumber(entry.endBpm, 1)}"
+                        val from = formatNumber(entry.startBpm, 1)
+                        val to = formatNumber(entry.endBpm, 1)
+                        val tempo = if (from == to) from else "$from → $to"
                         val what = if (entry.sleepMode) "Sleep mode · $tempo BPM" else "$tempo BPM · ${entry.signature}"
-                        Label(
+                        // May take two lines on a phone, so that the tempo range is never cut off.
+                        Text(
                             if (entry.label.isEmpty()) what else "${entry.label} · $what",
                             Modifier.weight(1f),
-                            if (entry.label.isEmpty()) Palette.Muted else Palette.Text,
+                            color = if (entry.label.isEmpty()) Palette.Muted else Palette.Text,
+                            fontSize = 13.sp,
                         )
                     }
                 }

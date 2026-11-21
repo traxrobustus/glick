@@ -98,6 +98,8 @@ class Metronome(
 
     private var workoutPass = -1
     private var workoutBpm = 0.0
+    private var bpmBeforeWorkout = 120.0
+    private var speedBeforeWorkout = 1.0
 
     /** Shown in the activity log next to a run that had this song playing. */
     @Volatile
@@ -273,7 +275,11 @@ class Metronome(
         workoutPass = -1
         workoutBpm = 0.0
         activeSong()?.let { active ->
-            if (_state.value.workout.enabled) setWorkoutPass(active, 0)
+            if (_state.value.workout.enabled) {
+                bpmBeforeWorkout = _state.value.bpm
+                speedBeforeWorkout = _state.value.songSpeed
+                setWorkoutPass(active, 0)
+            }
             setSongPositionToLoopStart(active)
         }
         runStartMillis = nowEpochMillis()
@@ -299,7 +305,17 @@ class Metronome(
         val t = _transport.value
         if (!t.playing) return
         // No song position while stopped: the song falls silent with the click.
-        _transport.value = t.copy(playing = false, beat = 0, beatPhase = 0.0, beatSilenced = false, songSeconds = -1.0)
+        _transport.value = t.copy(
+            playing = false, beat = 0, beatPhase = 0.0, beatSilenced = false, songSeconds = -1.0,
+            workoutPass = -1, workoutBpm = 0.0,
+        )
+        // A workout borrowed the tempo for its ladder; it goes back to what it was.
+        if (workoutPass >= 0) {
+            workoutPass = -1
+            workoutBpm = 0.0
+            _state.value = _state.value.copy(bpm = bpmBeforeWorkout, songSpeed = speedBeforeWorkout).sanitized()
+            activeSong()?.let(::applySong)
+        }
         val s = _state.value
         val entry = LogEntry(
             startEpochMillis = runStartMillis,
@@ -332,6 +348,7 @@ class Metronome(
     private fun resetCircleLocked() {
         circleElapsedNanos = 0.0
         circleBars = 0
+        _transport.value = _transport.value.copy(circleCompletions = 0)
         publishTimers()
     }
 

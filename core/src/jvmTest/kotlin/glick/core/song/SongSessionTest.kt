@@ -112,4 +112,19 @@ class SongSessionTest {
         song.setSteady(120.0, 2.0)
         assertFalse(assertNotNull(song.view.value.grid).unmapped)
     }
+
+    @Test
+    fun choosingAVariationInFollowModeLeavesTheClickAtTheSongsTempo() = session { song, metronome ->
+        song.load(ref, rate, SongSetup(knownBpm = 100.0, signature = TimeSignature(4, 4)))
+        song.awaitReady()
+        assertEquals(100.0, metronome.state.value.bpm, 0.01)
+        song.addVariation()
+        song.selectVariation(0)
+        song.selectVariation(1)
+        // Stored variations carry a click tempo for the other mode; it must not leak into this one.
+        assertEquals(100.0, metronome.state.value.bpm, 0.01)
+        assertEquals(1.0, metronome.state.value.songSpeed, 1e-9)
+        song.renameVariation("Chorus")
+        assertEquals(listOf(DEFAULT_VARIATION, "Chorus"), song.view.value.grid?.variations?.map { it.name })
+    }
 }

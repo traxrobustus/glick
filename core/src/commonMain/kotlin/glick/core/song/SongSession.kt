@@ -108,7 +108,13 @@ class SongSession(
         applyingVariation = true
         try {
             metronome.update {
-                it.copy(songMode = chosen.songMode, bpm = chosen.bpm, songSpeed = chosen.songSpeed, workout = chosen.workout)
+                // Each mode has its own tempo setting; the other one is left alone, or the click
+                // would be given a tempo that the song then has to be bent to.
+                if (chosen.songMode == SongMode.SongFollowsClick) {
+                    it.copy(songMode = chosen.songMode, bpm = chosen.bpm, workout = chosen.workout)
+                } else {
+                    it.copy(songMode = chosen.songMode, songSpeed = chosen.songSpeed, workout = chosen.workout)
+                }
             }
         } finally {
             applyingVariation = false

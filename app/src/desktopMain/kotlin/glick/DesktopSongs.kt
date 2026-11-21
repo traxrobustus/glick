@@ -18,8 +18,8 @@ import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 
 /** Opens the system file chooser for an audio file. */
-fun pickSongFile(): SongRef? {
-    val dialog = FileDialog(null as Frame?, "Open an audio file", FileDialog.LOAD)
+fun pickSongFile(owner: Frame?): SongRef? {
+    val dialog = FileDialog(owner, "Open an audio file", FileDialog.LOAD)
     dialog.setFilenameFilter { _, name -> name.substringAfterLast('.').lowercase() in SUPPORTED }
     dialog.file = SUPPORTED.joinToString(";") { "*.$it" }
     dialog.isVisible = true
@@ -31,8 +31,8 @@ fun pickSongFile(): SongRef? {
 private val SUPPORTED = listOf("wav", "flac", "mp3")
 
 /** Opens the system file chooser for a backup archive: where to save one, or which one to read. */
-fun pickBackupFile(save: Boolean): File? {
-    val dialog = FileDialog(null as Frame?, if (save) "Save the backup" else "Open a backup", if (save) FileDialog.SAVE else FileDialog.LOAD)
+fun pickBackupFile(owner: Frame?, save: Boolean): File? {
+    val dialog = FileDialog(owner, if (save) "Save the backup" else "Open a backup", if (save) FileDialog.SAVE else FileDialog.LOAD)
     if (save) dialog.file = "glick-backup-${java.time.LocalDate.now()}.zip"
     else dialog.setFilenameFilter { _, name -> name.endsWith(".zip", ignoreCase = true) }
     dialog.isVisible = true

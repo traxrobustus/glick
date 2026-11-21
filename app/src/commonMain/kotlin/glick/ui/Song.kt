@@ -175,17 +175,59 @@ fun SongPanel(
                 TextButton("Record the tempo by tapping", session::startRecording, selected = true, color = Palette.Accent)
             }
 
+            if (!view.recording && !grid.unmapped) VariationRow(grid, session)
+
+
+            // Shown right above the track it edits, so tapping a bar has a visible effect without scrolling.
+            if (!grid.unmapped && !view.recording && signatureBar in 0 until timeline.barCount) {
+                val bar = signatureBar
+                val signature = timeline.signatureOfBar(bar)
+                val changesHere = grid.signatures.any { it.bar == bar }
+                FlowRow(horizontalArrangement = row, verticalArrangement = row, itemVerticalAlignment = Alignment.CenterVertically) {
+                    Label(if (changesHere) "Time signature from bar ${bar + 1}" else "Bar ${bar + 1}: change the time signature here", color = Palette.Beat)
+                    Row(horizontalArrangement = row, verticalAlignment = Alignment.CenterVertically) {
+                        Label("beats", color = Palette.Muted)
+                        Stepper(
+                            signature.numerator,
+                            { v -> session.edit { it.setSignature(bar, signature.copy(numerator = v)) } },
+                            1..MAX_NUMERATOR,
+                        )
+                        Label("note", color = Palette.Muted)
+                        ChoiceStepper(
+                            signature.denominator, DENOMINATORS,
+                            { v -> session.edit { it.setSignature(bar, signature.copy(denominator = v)) } },
+                        )
+                    }
+                    if (changesHere && bar > 0) TextButton("Remove this change", { session.edit { it.removeSignature(bar) } })
+                    TextButton("Done", { signatureBar = -1 })
+                }
+            }
+
+            Waveform(
+                view = view,
+                grid = grid,
+                timeline = timeline,
+                transport = transport,
+                selected = selected,
+                onSelect = { selected = it },
+                signatureBar = signatureBar,
+                onSignatureBar = { signatureBar = if (signatureBar == it) -1 else it },
+                onEdit = session::edit,
+                height = if (compact) 190.dp else 250.dp,
+            )
+            if (view.recording) return@Panel
+
             val firstBeat = grid.firstBeat
             val steadyBpm = grid.knownBpm
             if (firstBeat != null && steadyBpm != null && !view.recording) {
                 FirstBeatAligner(
                     view, steadyBpm, firstBeat, timeline.signatureOfBar(0).numerator,
                     onChange = session::setSteady,
+                    onDone = { session.edit { it.copy(firstBeat = null) } },
                 )
             }
 
-            if (!view.recording && !grid.unmapped) {
-                VariationRow(grid, session)
+            if (!grid.unmapped) {
                 FlowRow(horizontalArrangement = row, verticalArrangement = row) {
                     TextButton(
                         "Click follows song",
@@ -212,43 +254,6 @@ fun SongPanel(
                 )
                 WorkoutBlock(state, timeline, transport, metronome::update)
             }
-
-            // Shown right above the track it edits, so tapping a bar has a visible effect without scrolling.
-            if (!grid.unmapped && !view.recording && signatureBar in 0 until timeline.barCount) {
-                val bar = signatureBar
-                val signature = timeline.signatureOfBar(bar)
-                val changesHere = grid.signatures.any { it.bar == bar }
-                FlowRow(horizontalArrangement = row, verticalArrangement = row, itemVerticalAlignment = Alignment.CenterVertically) {
-                    Label(if (changesHere) "Time signature from bar ${bar + 1}" else "Bar ${bar + 1}: change the time signature here", color = Palette.Beat)
-                    Row(horizontalArrangement = row, verticalAlignment = Alignment.CenterVertically) {
-                        Stepper(
-                            signature.numerator,
-                            { v -> session.edit { it.setSignature(bar, signature.copy(numerator = v)) } },
-                            1..MAX_NUMERATOR,
-                        )
-                        ChoiceStepper(
-                            signature.denominator, DENOMINATORS,
-                            { v -> session.edit { it.setSignature(bar, signature.copy(denominator = v)) } },
-                        )
-                    }
-                    if (changesHere && bar > 0) TextButton("Remove this change", { session.edit { it.removeSignature(bar) } })
-                    TextButton("Done", { signatureBar = -1 })
-                }
-            }
-
-            Waveform(
-                view = view,
-                grid = grid,
-                timeline = timeline,
-                transport = transport,
-                selected = selected,
-                onSelect = { selected = it },
-                signatureBar = signatureBar,
-                onSignatureBar = { signatureBar = if (signatureBar == it) -1 else it },
-                onEdit = session::edit,
-                height = if (compact) 190.dp else 250.dp,
-            )
-            if (view.recording) return@Panel
 
             if (!grid.unmapped) FlowRow(horizontalArrangement = row, verticalArrangement = row) {
                 TextButton("Undo", session::undo, selected = false, color = Palette.Muted)
@@ -604,7 +609,14 @@ private fun Waveform(
                 "loop: bars ${loopStart + 1} to $loopEnd",
                 TextStyle(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
             )
-            val labelX = (from + 8.dp.toPx()).coerceIn(4f, max(4f, size.width - label.size.width - 4f))
+            // Inside the loop when it is wide enough, otherwise beside it, clear of the handles.
+            val inside = to - from > label.size.width + 20.dp.toPx()
+            val wanted = when {
+                inside -> from + 8.dp.toPx()
+                to + 8.dp.toPx() + label.size.width < size.width -> to + 8.dp.toPx()
+                else -> from - 8.dp.toPx() - label.size.width
+            }
+            val labelX = wanted.coerceIn(4f, max(4f, size.width - label.size.width - 4f))
             drawText(label, Palette.Beat, Offset(labelX, 1.dp.toPx()))
         }
     }
@@ -708,7 +720,7 @@ private fun VariationRow(grid: SongGrid, session: SongSession) {
                     textStyle = TextStyle(color = Palette.Text, fontSize = 13.sp),
                     cursorBrush = SolidColor(Palette.Beat),
                     modifier = Modifier
-                        .width(170.dp)
+                        .width(130.dp)
                         .clip(RoundedCornerShape(7.dp))
                         .background(Palette.Inset)
                         .border(1.dp, Palette.Beat, RoundedCornerShape(7.dp))
@@ -858,6 +870,7 @@ private fun FirstBeatAligner(
     firstBeat: Double,
     beatsPerBar: Int,
     onChange: (bpm: Double, firstBeat: Double) -> Unit,
+    onDone: () -> Unit,
 ) {
     val peaks = view.peaks ?: return
     val period = 60.0 / bpm
@@ -934,6 +947,8 @@ private fun FirstBeatAligner(
             for (step in listOf(-10, -1, 1, 10)) {
                 TextButton(if (step > 0) "+$step ms" else "−${-step} ms", { nudge(step / 1000.0) }, horizontalPadding = 8.dp)
             }
+            // Once the grid sits right this block is in the way; "Steady grid" brings it back.
+            TextButton("Done", onDone, selected = true)
         }
     }
 }

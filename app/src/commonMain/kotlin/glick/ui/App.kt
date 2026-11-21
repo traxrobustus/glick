@@ -41,6 +41,10 @@ import glick.core.SongRef
 import glick.core.song.SongSession
 import kotlinx.coroutines.flow.StateFlow
 
+/** Runs [onBack] when the system's Back button is pressed; does nothing where there is none. */
+@Composable
+expect fun BackHandler(onBack: () -> Unit)
+
 /** Local date and time of a log entry, e.g. "2026-11-20 14:03". */
 expect fun formatDateTime(epochMillis: Long): String
 

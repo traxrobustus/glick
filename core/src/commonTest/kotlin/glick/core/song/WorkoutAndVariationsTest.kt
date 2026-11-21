@@ -20,6 +20,8 @@ class WorkoutAndVariationsTest {
     private fun runWorkout(mode: SongMode, workout: SongWorkout): Pair<List<Double>, Double> {
         val m = Metronome(MetronomeState(songMode = mode, workout = workout), nowEpochMillis = { 0L })
         m.setSong(steadySong(), resetSpeed = true)
+        if (mode == SongMode.SongFollowsClick) m.update { it.copy(bpm = 133.0) }
+        val startTempo = m.state.value.bpm
         m.play()
         val tempos = mutableListOf<Double>()
         var seconds = 0.0
@@ -33,6 +35,9 @@ class WorkoutAndVariationsTest {
             seconds += block / 1e9
         }
         assertFalse(m.transport.value.playing, "the workout must stop by itself")
+        // Afterwards nothing of the ladder is left: no pass shown, and the tempo is the one from before.
+        assertEquals(-1, m.transport.value.workoutPass)
+        assertEquals(startTempo, m.state.value.bpm, 0.01)
         return tempos to seconds
     }
 

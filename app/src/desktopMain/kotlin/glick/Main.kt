@@ -60,9 +60,11 @@ fun main() = application {
             } else false
         },
     ) {
+        // File choosers open over this window rather than in a corner of the screen.
+        app.frame = window
         App(app.metronome, midiPorts = ::midiInputPorts, audio = app.audio, song = app.song, 
             // The file chooser blocks until it is closed, so it must not run on the UI thread.
-            pickSong = { withContext(Dispatchers.IO) { pickSongFile() } },
+            pickSong = { withContext(Dispatchers.IO) { pickSongFile(window) } },
             backup = app.backup,
         )
     }
@@ -90,6 +92,10 @@ private class DesktopApp(scope: CoroutineScope) {
     val song = SongSession(metronome, CachingSongLibrary(DesktopAudioDecoder(), File(directory, "cache")), documents, scope)
     private val keeper = SnapshotKeeper(metronome, song, documents, scope).also { it.window = snapshot?.window }
 
+    /** The app's window, once it exists. */
+    @Volatile
+    var frame: java.awt.Frame? = null
+
     val backup = object : BackupActions {
         private val places = BackupPlaces(directory, File(directory, "audio"))
         private val audioFiles = object : AudioAccess {
@@ -98,7 +104,7 @@ private class DesktopApp(scope: CoroutineScope) {
         }
 
         override suspend fun export(includeAudio: Boolean): String? = withContext(Dispatchers.IO) {
-            val target = pickBackupFile(save = true) ?: return@withContext null
+            val target = pickBackupFile(frame, save = true) ?: return@withContext null
             // What is on screen may not be on disk yet.
             keeper.saveNow()
             song.flush()
@@ -108,7 +114,7 @@ private class DesktopApp(scope: CoroutineScope) {
 
         override suspend fun import(replace: Boolean): String? {
             val report = withContext(Dispatchers.IO) {
-                val source = pickBackupFile(save = false) ?: return@withContext null
+                val source = pickBackupFile(frame, save = false) ?: return@withContext null
                 source.inputStream().use { Backup.import(places, audioFiles, it, replace) }
             } ?: return null
             Backup.apply(report, replace, metronome, song)
