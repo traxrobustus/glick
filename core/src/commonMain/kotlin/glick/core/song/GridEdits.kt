@@ -212,3 +212,50 @@ fun SongGrid.smoothed(reach: Int = 4): SongGrid {
     val shifted = ((downbeat - (beats.size - moved.size)) % perBar + perBar) % perBar
     return copy(beats = moved, downbeat = shifted, firstBeat = null).sanitized()
 }
+
+/** Removes the signature change at [bar]; that bar then continues in the signature before it. Bar 0 always has one. */
+fun SongGrid.removeSignature(bar: Int): SongGrid =
+    if (bar <= 0) this else copy(signatures = signatures.filter { it.bar != bar }).sanitized()
+
+/** A grid whose variation in use holds the grid's loop and the practice settings of [state]. */
+fun SongGrid.capturing(state: glick.core.MetronomeState): SongGrid {
+    if (variations.isEmpty()) return this
+    val before = current
+    // While a workout is on, the tempo belongs to its ladder and is not the variation's own.
+    val own = !state.workout.enabled
+    val now = before.copy(
+        loopStartBar = loopStartBar,
+        loopEndBar = loopEndBar,
+        songMode = state.songMode,
+        bpm = if (own && state.songMode == glick.core.SongMode.SongFollowsClick) state.bpm else before.bpm,
+        songSpeed = if (own && state.songMode == glick.core.SongMode.ClickFollowsSong) state.songSpeed else before.songSpeed,
+        workout = state.workout,
+    )
+    return if (now == before) this else copy(variations = variations.mapIndexed { i, v -> if (i == variation) now else v })
+}
+
+/** Makes variation [index] the one in use and takes over its loop. */
+fun SongGrid.withVariation(index: Int): SongGrid {
+    val chosen = variations.getOrNull(index) ?: return this
+    return copy(variation = index, loopStartBar = chosen.loopStartBar, loopEndBar = chosen.loopEndBar).sanitized()
+}
+
+/** Stores the current loop and settings once more, as a new variation that is then in use. */
+fun SongGrid.addVariation(): SongGrid {
+    val names = variations.map { it.name }.toSet()
+    val name = generateSequence(variations.size + 1) { it + 1 }.map { "Variation $it" }.first { it !in names }
+    return copy(variations = variations + current.copy(name = name), variation = variations.size)
+}
+
+/** Deletes the variation in use; the one before it takes over. The last variation cannot be deleted. */
+fun SongGrid.deleteVariation(): SongGrid {
+    if (variations.size <= 1) return this
+    val left = variations.filterIndexed { i, _ -> i != variation }
+    return copy(variations = left).withVariation((variation - 1).coerceAtLeast(0))
+}
+
+fun SongGrid.renameVariation(name: String): SongGrid {
+    val clean = name.trim().take(40)
+    if (clean.isEmpty()) return this
+    return copy(variations = variations.mapIndexed { i, v -> if (i == variation) v.copy(name = clean) else v })
+}

@@ -47,6 +47,9 @@ data class Transport(
     val songSeconds: Double = -1.0,
     /** Changes whenever the song position jumps (start, loop wrap, edit) rather than flows. */
     val songJumps: Int = 0,
+    /** In a song workout: which pass is playing (from 0) and at what tempo; -1 and 0 otherwise. */
+    val workoutPass: Int = -1,
+    val workoutBpm: Double = 0.0,
 )
 
 /**
@@ -93,8 +96,12 @@ class Metronome(
     private var songBeat = 0
     private var songJumps = 0
 
-    /** In "click follows song" mode: how much faster than the song's own tempo the click runs. */
-    private var songSpeed = 1.0
+    private var workoutPass = -1
+    private var workoutBpm = 0.0
+
+    /** Shown in the activity log next to a run that had this song playing. */
+    @Volatile
+    var songName: String? = null
 
     /** While true no click sounds; the transport runs on. Used while a song's tempo is being tapped. */
     @Volatile
@@ -126,7 +133,7 @@ class Metronome(
      */
     fun setSong(timeline: SongTimeline?, resetSpeed: Boolean = false): Unit = synchronized(lock) {
         song = timeline?.takeIf { it.playable }
-        if (resetSpeed) songSpeed = 1.0
+        if (resetSpeed) _state.value = _state.value.copy(songSpeed = 1.0)
         val active = activeSong() ?: return
         val t = _transport.value
         songBar = if (t.playing) songBar.coerceIn(active.loopStartBar, active.loopEndBar - 1) else active.loopStartBar
@@ -147,7 +154,7 @@ class Metronome(
         val signature = active.signatureOfBar(songBar)
         if (s.signature != signature) s = s.copy(signature = signature)
         if (s.songMode == SongMode.ClickFollowsSong) {
-            val bpm = (active.bpmOfBeat(songBeat) * songSpeed).coerceIn(MIN_BPM, MAX_BPM)
+            val bpm = (active.bpmOfBeat(songBeat) * s.songSpeed).coerceIn(MIN_BPM, MAX_BPM)
             if (s.bpm != bpm) s = s.copy(bpm = bpm)
         }
         if (s !== old) _state.value = s.sanitized()
@@ -161,7 +168,7 @@ class Metronome(
         val active = activeSong() ?: return
         val s = _state.value
         if (s.songMode != SongMode.ClickFollowsSong || s.bpm == before) return
-        songSpeed = (s.bpm / active.bpmOfBeat(songBeat)).coerceIn(0.05, 20.0)
+        _state.value = s.copy(songSpeed = s.bpm / active.bpmOfBeat(songBeat)).sanitized()
     }
 
     // Disk writes are queued under [lock] and run after it is released, so the
@@ -183,11 +190,16 @@ class Metronome(
         var new = transform(old).sanitized()
         val active = song.takeIf { !new.sleepMode }
         if (active != null) {
-            // Bars come from the song; switching to follow mode starts at the song's own tempo.
+            // Bars come from the song. In follow mode so does the tempo: entering that
+            // mode starts at the song's own speed unless a speed is given with it, and a
+            // new speed sets the tempo.
             new = new.copy(signature = active.signatureOfBar(songBar)).sanitized()
-            if (new.songMode == SongMode.ClickFollowsSong && old.songMode != SongMode.ClickFollowsSong) {
-                songSpeed = 1.0
-                new = new.copy(bpm = active.bpmOfBeat(songBeat).coerceIn(MIN_BPM, MAX_BPM))
+            if (new.songMode == SongMode.ClickFollowsSong) {
+                val entering = old.songMode != SongMode.ClickFollowsSong
+                if (entering && new.songSpeed == old.songSpeed) new = new.copy(songSpeed = 1.0)
+                if (entering || new.songSpeed != old.songSpeed) {
+                    new = new.copy(bpm = (active.bpmOfBeat(songBeat) * new.songSpeed).coerceIn(MIN_BPM, MAX_BPM))
+                }
             }
         }
         if (new == old) return
@@ -201,6 +213,18 @@ class Metronome(
         // A shorter bar wraps the beat counter but keeps the phase, so the pulse never jumps.
         if (t.beat >= numerator) _transport.value = t.copy(beat = t.beat % numerator)
         publishTimers()
+    }
+
+    /** Puts the tempo of workout pass [pass] in force. */
+    private fun setWorkoutPass(active: SongTimeline, pass: Int) {
+        val s = _state.value
+        val tempo = s.workout.tempoOfPass(pass, s.workout.maxBpm ?: active.loopBpm)
+        workoutPass = pass
+        workoutBpm = tempo
+        _state.value = (
+            if (s.songMode == SongMode.ClickFollowsSong) s.copy(songSpeed = tempo / active.loopBpm)
+            else s.copy(bpm = tempo)
+            ).sanitized()
     }
 
     private fun setSongPositionToLoopStart(active: SongTimeline) {
@@ -246,7 +270,12 @@ class Metronome(
         val t = _transport.value
         if (t.playing) return
         if (t.sessionFinished) sessionElapsedNanos = 0.0
-        activeSong()?.let(::setSongPositionToLoopStart)
+        workoutPass = -1
+        workoutBpm = 0.0
+        activeSong()?.let { active ->
+            if (_state.value.workout.enabled) setWorkoutPass(active, 0)
+            setSongPositionToLoopStart(active)
+        }
         runStartMillis = nowEpochMillis()
         runStartBpm = _state.value.effective().bpm
         _transport.value = t.copy(
@@ -279,6 +308,7 @@ class Metronome(
             endBpm = s.effective().bpm,
             signature = s.signature.toString(),
             sleepMode = s.sleepMode,
+            label = if (activeSong() != null) songName.orEmpty() else "",
         )
         pendingIo += { logStore.append(entry) }
         _log.value = _log.value + entry
@@ -303,6 +333,12 @@ class Metronome(
         circleElapsedNanos = 0.0
         circleBars = 0
         publishTimers()
+    }
+
+    /** Reads the log and the patterns again from their stores, after a backup was imported into them. */
+    fun reloadStores(): Unit = synchronized(lock) {
+        _log.value = logStore.load()
+        _patterns.value = patternStore.load()
     }
 
     fun clearLog() {
@@ -384,6 +420,12 @@ class Metronome(
                         if (songBar >= active.loopEndBar) {
                             songBar = active.loopStartBar
                             songJumps++
+                            if (workoutPass >= 0) {
+                                // One pass of the ladder is done: the next is a step faster, and the one at the top is the last.
+                                val top = _state.value.workout.let { it.maxBpm ?: active.loopBpm }
+                                if (workoutBpm >= maxOf(top, _state.value.workout.startBpm) - 1e-9) stopRequested = true
+                                else setWorkoutPass(active, workoutPass + 1)
+                            }
                         }
                         songBeat = active.barStartBeat(songBar)
                     }
@@ -512,6 +554,8 @@ class Metronome(
             sessionElapsedSeconds = sessionElapsedNanos / 1e9,
             songSeconds = if (active != null && t.playing) active.secondsAt(songBeat + t.beatPhase) else -1.0,
             songJumps = songJumps,
+            workoutPass = if (t.playing) workoutPass else -1,
+            workoutBpm = if (t.playing) workoutBpm else 0.0,
         )
     }
 }
