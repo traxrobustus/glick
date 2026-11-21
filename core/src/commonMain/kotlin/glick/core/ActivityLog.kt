@@ -8,17 +8,19 @@ data class LogEntry(
     val endBpm: Double,
     val signature: String,
     val sleepMode: Boolean,
+    /** What was practised: the song's name, when one was playing. */
+    val label: String = "",
 ) {
     val durationMillis: Long get() = (endEpochMillis - startEpochMillis).coerceAtLeast(0)
 
     /** Tab-separated form used by file-backed stores. */
     fun toLine(): String =
-        listOf(startEpochMillis, endEpochMillis, startBpm, endBpm, signature, if (sleepMode) 1 else 0)
+        listOf(startEpochMillis, endEpochMillis, startBpm, endBpm, signature, if (sleepMode) 1 else 0, label)
             .joinToString("\t")
 
     companion object {
         fun parse(line: String): LogEntry? {
-            val p = line.trim().split('\t')
+            val p = line.trimEnd('\r', '\n').split('\t')
             if (p.size < 6) return null
             return LogEntry(
                 startEpochMillis = p[0].toLongOrNull() ?: return null,
@@ -27,6 +29,8 @@ data class LogEntry(
                 endBpm = p[3].toDoubleOrNull() ?: return null,
                 signature = p[4],
                 sleepMode = p[5] == "1",
+                // Entries written before labels existed have six fields.
+                label = p.getOrElse(6) { "" },
             )
         }
     }

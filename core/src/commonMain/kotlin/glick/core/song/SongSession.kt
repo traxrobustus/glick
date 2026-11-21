@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 
 /** What the song view shows. */
 data class SongView(
@@ -52,10 +54,92 @@ class SongSession(
     private val _view = MutableStateFlow(SongView())
     val view: StateFlow<SongView> = _view.asStateFlow()
 
+    private val _songs = MutableStateFlow(readLibrary(store))
+    /** Every song opened so far, most recent first. */
+    val songs: StateFlow<List<SongRef>> = _songs.asStateFlow()
+
+    init {
+        // The variation in use follows the practice settings as they are changed (never mid-run: a
+        // workout or the song itself moves the tempo then).
+        scope.launch {
+            metronome.state.collect { state ->
+                val view = _view.value
+                val grid = view.grid ?: return@collect
+                if (!view.ready || view.recording || applyingVariation || metronome.transport.value.playing) return@collect
+                val captured = grid.capturing(state)
+                if (captured != grid) {
+                    _view.value = _view.value.copy(grid = captured)
+                    view.ref?.let { save(it, captured) }
+                }
+            }
+        }
+    }
+
+    /** Reads the song library again, after a backup was imported into the store. */
+    fun reloadLibrary() {
+        _songs.value = readLibrary(store)
+    }
+
+    private fun remember(ref: SongRef) {
+        val all = listOf(ref) + _songs.value.filter { it.id != ref.id }
+        _songs.value = all
+        scope.launch(Dispatchers.Default) { store.write(LIBRARY, encodeLibrary(all)) }
+    }
+
+    /** Makes variation [index] of the song the one in use: its loop and its practice settings. */
+    fun selectVariation(index: Int) {
+        if (_view.value.grid?.variations?.getOrNull(index) == null) return
+        switching { it.withVariation(index) }
+    }
+
+    fun addVariation() = edit { it.capturing(metronome.state.value).addVariation() }
+
+    fun deleteVariation() = switching { it.deleteVariation() }
+
+    /**
+     * Changes which variation is in use. The settings in force belong to the one being
+     * left, so they must not be written into the one arriving before its own are applied.
+     */
+    private fun switching(transform: (SongGrid) -> SongGrid) {
+        // What is in force is first written into the one being left, in case it was only just set.
+        val leaving = metronome.state.value.takeIf { !metronome.transport.value.playing }
+        applyingVariation = true
+        try {
+            edit { transform(if (leaving != null) it.capturing(leaving) else it) }
+        } finally {
+            applyingVariation = false
+        }
+        applyVariationSettings()
+    }
+
+    fun renameVariation(name: String) = edit { it.renameVariation(name) }
+
+    /** Puts the practice settings of the variation in use in force. */
+    private fun applyVariationSettings() {
+        val chosen = _view.value.grid?.current ?: return
+        applyingVariation = true
+        try {
+            metronome.update {
+                // Each mode has its own tempo setting; the other one is left alone, or the click
+                // would be given a tempo that the song then has to be bent to.
+                if (chosen.songMode == SongMode.SongFollowsClick) {
+                    it.copy(songMode = chosen.songMode, bpm = chosen.bpm, workout = chosen.workout)
+                } else {
+                    it.copy(songMode = chosen.songMode, workout = chosen.workout)
+                }
+            }
+            // Entering follow mode starts at the song's own speed; the variation's comes on top.
+            if (chosen.songMode != SongMode.SongFollowsClick) metronome.update { it.copy(songSpeed = chosen.songSpeed) }
+        } finally {
+            applyingVariation = false
+        }
+    }
+
     private var loading: Job? = null
     private var saving: Job? = null
     private var source: AudioSource? = null
     private var attacks: List<Double>? = null
+    private var applyingVariation = false
     private var modeBeforeRecording = SongMode.ClickFollowsSong
     private var bpmBeforeRecording = 120.0
     private val undone = ArrayDeque<SongGrid>()
@@ -90,8 +174,12 @@ class SongSession(
                     ?: blank.placeholder(duration)
                 source = audio
                 metronome.songAudio = audio
+                metronome.songName = ref.name
                 metronome.setSong(SongTimeline(grid), resetSpeed = true)
                 _view.value = SongView(ref = ref, grid = grid, peaks = peaks, durationSeconds = duration)
+                // A song opened before comes back as it was last practised.
+                if (saved != null) applyVariationSettings()
+                remember(ref)
                 if (saved == null) save(ref, grid)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -184,7 +272,10 @@ class SongSession(
     /** Applies one edit to the grid. */
     fun edit(transform: (SongGrid) -> SongGrid) {
         val current = _view.value.grid ?: return
-        val changed = transform(current).sanitized().copy(unmapped = false)
+        val changed = transform(current).sanitized().copy(unmapped = false).let {
+            // The variation in use always holds the loop as it now is.
+            if (applyingVariation || metronome.transport.value.playing) it.capturingLoop() else it.capturing(metronome.state.value)
+        }
         if (changed == current) return
         history.addLast(current)
         if (history.size > MAX_UNDO) history.removeFirst()
@@ -253,6 +344,7 @@ class SongSession(
     private fun detach() {
         metronome.clickMuted = false
         attacks = null
+        metronome.songName = null
         metronome.setSong(null)
         metronome.songAudio = null
         source = null
@@ -263,10 +355,28 @@ class SongSession(
         if (view.busy != null) _view.value = view.copy(busy = stage, progress = progress)
     }
 
-    private companion object {
-        const val MAX_UNDO = 100
-        const val SAVE_DELAY_MILLIS = 400L
-        const val PLACEHOLDER_BPM = 120.0
+    /** While playing only the loop is taken over; the tempo may be a workout's or the song's at that moment. */
+    private fun SongGrid.capturingLoop(): SongGrid {
+        if (variations.isEmpty()) return this
+        val now = current.copy(loopStartBar = loopStartBar, loopEndBar = loopEndBar)
+        return if (now == current) this else copy(variations = variations.mapIndexed { i, v -> if (i == variation) now else v })
+    }
+
+    companion object {
+        private const val MAX_UNDO = 100
+        private const val SAVE_DELAY_MILLIS = 400L
+        private const val PLACEHOLDER_BPM = 120.0
+
+        /** The document that lists every song opened so far. */
+        const val LIBRARY = "songs/index.json"
+
+        private val libraryFormat = Json { ignoreUnknownKeys = true }
+        private val librarySerializer = ListSerializer(SongRef.serializer())
+
+        fun readLibrary(store: TextStore): List<SongRef> =
+            store.read(LIBRARY)?.let { runCatching { libraryFormat.decodeFromString(librarySerializer, it) }.getOrNull() }.orEmpty()
+
+        fun encodeLibrary(songs: List<SongRef>): String = libraryFormat.encodeToString(librarySerializer, songs)
 
         /** A file name for the song's map, from a hash of its locator. */
         fun projectName(ref: SongRef): String {

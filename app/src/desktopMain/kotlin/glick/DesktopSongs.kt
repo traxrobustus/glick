@@ -18,17 +18,35 @@ import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 
 /** Opens the system file chooser for an audio file. */
-fun pickSongFile(): SongRef? {
-    val dialog = FileDialog(null as Frame?, "Open an audio file", FileDialog.LOAD)
+fun pickSongFile(owner: Frame?): SongRef? {
+    val dialog = FileDialog(owner, "Open an audio file", FileDialog.LOAD)
     dialog.setFilenameFilter { _, name -> name.substringAfterLast('.').lowercase() in SUPPORTED }
     dialog.file = SUPPORTED.joinToString(";") { "*.$it" }
+    dialog.placeOver(owner)
     dialog.isVisible = true
     val name = dialog.file ?: return null
     val file = File(dialog.directory, name)
     return SongRef(id = file.absolutePath, name = file.name)
 }
 
+/** Opens the chooser over the window it belongs to, also when that is not on the main screen. */
+private fun FileDialog.placeOver(owner: Frame?) {
+    if (owner != null) setLocation(owner.x + 40, owner.y + 40)
+}
+
 private val SUPPORTED = listOf("wav", "flac", "mp3")
+
+/** Opens the system file chooser for a backup archive: where to save one, or which one to read. */
+fun pickBackupFile(owner: Frame?, save: Boolean): File? {
+    val dialog = FileDialog(owner, if (save) "Save the backup" else "Open a backup", if (save) FileDialog.SAVE else FileDialog.LOAD)
+    if (save) dialog.file = "glick-backup-${java.time.LocalDate.now()}.zip"
+    else dialog.setFilenameFilter { _, name -> name.endsWith(".zip", ignoreCase = true) }
+    dialog.placeOver(owner)
+    dialog.isVisible = true
+    val name = dialog.file ?: return null
+    val file = File(dialog.directory, name)
+    return if (save && !file.name.contains('.')) File(file.path + ".zip") else file
+}
 
 /** Decodes WAV with Java Sound, MP3 with JLayer and FLAC with jFLAC. */
 class DesktopAudioDecoder : AudioFileDecoder {

@@ -26,6 +26,36 @@ enum class SongMode {
     SongFollowsClick,
 }
 
+/**
+ * A tempo ladder for practising a song: its loop is played once at
+ * [startBpm], then again [stepBpm] faster each time, the last time exactly at
+ * the maximum, and then everything stops.
+ */
+@Serializable
+data class SongWorkout(
+    val enabled: Boolean = false,
+    val startBpm: Double = 60.0,
+    val stepBpm: Double = 5.0,
+    /** The tempo of the last pass; null means the song's own tempo. */
+    val maxBpm: Double? = null,
+) {
+    fun sanitized(): SongWorkout {
+        val start = startBpm.coerceIn(MIN_BPM, MAX_BPM)
+        return copy(
+            startBpm = start,
+            stepBpm = stepBpm.coerceIn(0.1, 500.0),
+            maxBpm = maxBpm?.coerceIn(start, MAX_BPM),
+        )
+    }
+
+    /** The tempo of pass number [pass] (from 0) when the ladder ends at [max]. */
+    fun tempoOfPass(pass: Int, max: Double): Double = minOf(startBpm + pass * stepBpm, maxOf(max, startBpm))
+
+    /** How many passes the ladder has when it ends at [max]. */
+    fun passes(max: Double): Int =
+        if (max <= startBpm) 1 else kotlin.math.ceil((max - startBpm) / stepBpm - 1e-9).toInt() + 1
+}
+
 /** The tempo counts [denominator] notes per minute; a bar holds [numerator] of them. */
 @Serializable
 data class TimeSignature(val numerator: Int = 4, val denominator: Int = 4) {
@@ -127,6 +157,9 @@ data class MetronomeState(
     /** Who leads when a song is loaded. */
     val songMode: SongMode = SongMode.ClickFollowsSong,
     val songLevel: Float = 0.8f,
+    /** In "click follows song" mode: how much faster than its own tempo the song (and the click with it) plays. */
+    val songSpeed: Double = 1.0,
+    val workout: SongWorkout = SongWorkout(),
 ) {
     /** Brings every field back inside its legal range. */
     fun sanitized(): MetronomeState {
@@ -164,6 +197,8 @@ data class MetronomeState(
             ),
             session = session.copy(minutes = session.minutes.coerceIn(0.1, 6000.0)),
             songLevel = songLevel.coerceIn(0f, 1f),
+            songSpeed = if (songSpeed.isNaN()) 1.0 else songSpeed.coerceIn(0.05, 20.0),
+            workout = workout.sanitized(),
         )
     }
 

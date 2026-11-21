@@ -2,6 +2,7 @@ package glick.core.song
 
 import glick.core.InMemoryTextStore
 import glick.core.Metronome
+import glick.core.SongMode
 import glick.core.SongRef
 import glick.core.TimeSignature
 import kotlinx.coroutines.CoroutineScope
@@ -111,5 +112,43 @@ class SongSessionTest {
         assertTrue(assertNotNull(song.view.value.grid).unmapped)
         song.setSteady(120.0, 2.0)
         assertFalse(assertNotNull(song.view.value.grid).unmapped)
+    }
+
+    @Test
+    fun choosingAVariationInFollowModeLeavesTheClickAtTheSongsTempo() = session { song, metronome ->
+        song.load(ref, rate, SongSetup(knownBpm = 100.0, signature = TimeSignature(4, 4)))
+        song.awaitReady()
+        assertEquals(100.0, metronome.state.value.bpm, 0.01)
+        song.addVariation()
+        song.selectVariation(0)
+        song.selectVariation(1)
+        // Stored variations carry a click tempo for the other mode; it must not leak into this one.
+        assertEquals(100.0, metronome.state.value.bpm, 0.01)
+        assertEquals(1.0, metronome.state.value.songSpeed, 1e-9)
+        song.renameVariation("Chorus")
+        assertEquals(listOf(DEFAULT_VARIATION, "Chorus"), song.view.value.grid?.variations?.map { it.name })
+    }
+
+    @Test
+    fun aTempoSetOnOneVariationStaysOutOfTheOthers() = session { song, metronome ->
+        song.load(ref, rate, SongSetup(knownBpm = 100.0, signature = TimeSignature(4, 4)))
+        song.awaitReady()
+        metronome.update { it.copy(songMode = SongMode.SongFollowsClick, bpm = 100.0) }
+        song.addVariation()
+        metronome.update { it.copy(bpm = 80.0) }
+        song.selectVariation(0)
+        assertEquals(100.0, metronome.state.value.bpm, 0.01)
+        song.selectVariation(1)
+        assertEquals(80.0, metronome.state.value.bpm, 0.01)
+
+        // The same for the speed in follow mode.
+        metronome.update { it.copy(songMode = SongMode.ClickFollowsSong, songSpeed = 1.2) }
+        assertEquals(120.0, metronome.state.value.bpm, 0.01)
+        song.selectVariation(0)
+        assertEquals(100.0, metronome.state.value.bpm, 0.01)
+        assertEquals(SongMode.SongFollowsClick, metronome.state.value.songMode)
+        song.deleteVariation()
+        assertEquals(1.2, metronome.state.value.songSpeed, 1e-9)
+        assertEquals(120.0, metronome.state.value.bpm, 0.01)
     }
 }

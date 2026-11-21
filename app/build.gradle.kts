@@ -25,6 +25,9 @@ kotlin {
             implementation(libs.compose.ui)
             implementation(libs.compose.material3)
         }
+        androidMain.dependencies {
+            implementation(libs.androidx.activity.compose)
+        }
         named("desktopMain") {
             dependencies {
                 implementation(compose.desktop.currentOs)

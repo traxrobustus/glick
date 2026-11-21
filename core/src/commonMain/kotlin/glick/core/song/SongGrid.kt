@@ -2,6 +2,8 @@ package glick.core.song
 
 import glick.core.DENOMINATORS
 import glick.core.MAX_NUMERATOR
+import glick.core.SongMode
+import glick.core.SongWorkout
 import glick.core.TimeSignature
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -9,6 +11,26 @@ import kotlinx.serialization.json.Json
 /** One beat of the song, in seconds from the start of the file. A pinned beat was placed by hand. */
 @Serializable
 data class BeatMarker(val seconds: Double, val pinned: Boolean = false)
+
+/**
+ * One way of practising a song: which bars loop, who follows whom, at what
+ * tempo or speed, and the workout ladder. A song's variations share its beats
+ * and time signatures.
+ */
+@Serializable
+data class SongVariation(
+    val name: String,
+    val loopStartBar: Int = 0,
+    val loopEndBar: Int? = null,
+    val songMode: SongMode = SongMode.ClickFollowsSong,
+    /** The click's tempo when the song follows it. */
+    val bpm: Double = 120.0,
+    /** The playback speed when the click follows the song. */
+    val songSpeed: Double = 1.0,
+    val workout: SongWorkout = SongWorkout(),
+)
+
+const val DEFAULT_VARIATION = "Whole song"
 
 /** From bar number [bar] on, bars have this time signature. */
 @Serializable
@@ -37,6 +59,10 @@ data class SongGrid(
     val firstBeat: Double? = null,
     /** True until the song has been given beats by tapping, a known tempo or detection. */
     val unmapped: Boolean = false,
+    /** The stored ways of practising this song; there is always at least one. */
+    val variations: List<SongVariation> = emptyList(),
+    /** Index of the variation in use; the loop above is its loop. */
+    val variation: Int = 0,
 ) {
     /** Sorted beats, legal signatures and a loop inside the song. */
     fun sanitized(): SongGrid {
@@ -54,8 +80,17 @@ data class SongGrid(
         val bars = SongTimeline(grid).barCount
         val start = loopStartBar.coerceIn(0, (bars - 1).coerceAtLeast(0))
         val end = loopEndBar?.coerceIn(start + 1, bars.coerceAtLeast(start + 1))?.takeIf { it < bars }
-        return grid.copy(loopStartBar = start, loopEndBar = end)
+        val kept = variations.ifEmpty { listOf(SongVariation(DEFAULT_VARIATION, start, end)) }
+        return grid.copy(
+            loopStartBar = start,
+            loopEndBar = end,
+            variations = kept,
+            variation = variation.coerceIn(0, kept.lastIndex),
+        )
     }
+
+    /** The variation in use, on a sanitized grid. */
+    val current: SongVariation get() = variations[variation]
 
     fun signatureOfBar(bar: Int): TimeSignature = signatures.last { it.bar <= bar }.signature
 
@@ -162,4 +197,12 @@ class SongTimeline(val grid: SongGrid) {
     fun bpmOfBeat(beat: Int): Double = 60.0 / (secondsAt(beat + 1.0) - secondsAt(beat.toDouble()))
 
     fun barStartSeconds(bar: Int): Double = secondsAt(barStartBeat(bar).toDouble())
+
+    /** The average tempo of the loop zone as recorded: its beats over its length. */
+    val loopBpm: Double
+        get() {
+            val beats = barStartBeat(loopEndBar) - barStartBeat(loopStartBar)
+            val seconds = barStartSeconds(loopEndBar) - barStartSeconds(loopStartBar)
+            return if (beats > 0 && seconds > 0) beats * 60.0 / seconds else 120.0
+        }
 }
